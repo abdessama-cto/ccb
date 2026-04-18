@@ -101,6 +101,15 @@ install_homebrew() {
     return 0
   fi
 
+  # Check common Homebrew locations if not in PATH
+  if ! command -v brew >/dev/null 2>&1; then
+    if [[ -x /opt/homebrew/bin/brew ]]; then
+      eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [[ -x /usr/local/bin/brew ]]; then
+      eval "$(/usr/local/bin/brew shellenv)"
+    fi
+  fi
+
   if command -v brew >/dev/null 2>&1; then
     success "Homebrew present ($(brew --version 2>/dev/null | head -1))"
     return 0
