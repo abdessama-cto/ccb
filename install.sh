@@ -160,26 +160,39 @@ resolve_version() {
 
     # Try GitHub API first (most reliable source for tag_name).
     api_json=""
+    local http_code
     set +e
-    api_json=$(curl -fsSL --http1.1 --retry 3 --retry-delay 2 --connect-timeout 15 \
+    # Use -w to get HTTP status code and -s (silent) to avoid progress bar
+    # We remove -f to handle the error manually based on http_code
+    api_json=$(curl -sSL --http1.1 --retry 3 --retry-delay 2 --connect-timeout 15 \
       -H "Accept: application/vnd.github+json" \
-      "$api_url" 2>/dev/null)
+      -w "%{http_code}" \
+      "$api_url")
     api_exit=$?
     set -e
 
-    if [[ -n "$api_json" ]]; then
-      if command -v jq >/dev/null 2>&1; then
-        RESOLVED_VERSION=$(printf '%s' "$api_json" | jq -r '.tag_name // empty' 2>/dev/null || true)
-      else
-        # Fallback parser so "latest" still works when jq is missing.
-        RESOLVED_VERSION=$(printf '%s' "$api_json" \
-          | tr -d '\n' \
-          | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    if [[ "$api_exit" -eq 0 ]]; then
+      http_code="${api_json: -3}"
+      api_json="${api_json%???}"
+      
+      if [[ "$http_code" -eq 200 ]]; then
+        if command -v jq >/dev/null 2>&1; then
+          RESOLVED_VERSION=$(printf '%s' "$api_json" | jq -r '.tag_name // empty' 2>/dev/null || true)
+        else
+          RESOLVED_VERSION=$(printf '%s' "$api_json" \
+            | tr -d '\n' \
+            | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        fi
+      elif [[ "$http_code" -eq 404 ]]; then
+        info "Repository found, but no releases are published yet."
+      elif [[ "$http_code" -eq 403 ]]; then
+        warn "GitHub API rate limit exceeded or access denied (HTTP 403)."
       fi
     fi
 
+    # Fallback resolver (scraping redirect)
     if [[ -z "${RESOLVED_VERSION:-}" ]]; then
-      warn "GitHub API unavailable (curl exit ${api_exit}). Trying fallback resolver..."
+      info "Trying fallback resolver..."
       fallback_tag=$(
         curl -fsSI --http1.1 --retry 2 --retry-delay 1 --connect-timeout 10 \
           "$redirect_url" 2>/dev/null \
@@ -187,13 +200,21 @@ resolve_version() {
         | tr -d '\r' \
         | tail -1
       ) || true
+      
+      # If fallback_tag is "releases", it means the redirect was to the general releases page
+      if [[ "$fallback_tag" == "releases" ]]; then
+        fallback_tag=""
+      fi
       RESOLVED_VERSION="${fallback_tag:-}"
     fi
 
     if [[ -z "${RESOLVED_VERSION:-}" ]]; then
       fatal "Could not resolve 'latest' tag.
-  Possible causes: no internet, GitHub rate limit, firewall/proxy, or no releases yet.
-  Last curl exit code: ${api_exit}
+  Possible causes:
+    - No releases published at https://github.com/${GITHUB_REPO}/releases
+    - Firewall/proxy or no internet connection
+    - GitHub API rate limit
+  
   Try pinning a version: CCBOOTSTRAP_VERSION=v1.0.0 curl -fsSL ... | bash"
     fi
   else
