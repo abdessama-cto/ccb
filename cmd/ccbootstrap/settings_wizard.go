@@ -18,12 +18,12 @@ import (
 type settingsStep int
 
 const (
-	stepProvider settingsStep = iota
+	stepLanguage settingsStep = iota
+	stepProvider
 	stepCredential // API key (openai/gemini) OR Ollama URL
 	stepModel
 	stepBudget
 	stepProfile
-	stepLanguage
 	stepConfirm
 )
 
@@ -101,7 +101,7 @@ func newSettingsWizard(cfg *config.Config) settingsWizard {
 		width:  90,
 		height: 24,
 	}
-	w.enterStep(stepProvider)
+	w.enterStep(stepLanguage)
 	return w
 }
 
@@ -198,10 +198,10 @@ func nextStep(s settingsStep) settingsStep {
 	return s + 1
 }
 
-// prevStep returns the step that precedes s, or stepProvider if s is the first.
+// prevStep returns the step that precedes s, or stepLanguage if s is the first.
 func prevStep(s settingsStep) settingsStep {
-	if s <= stepProvider {
-		return stepProvider
+	if s <= stepLanguage {
+		return stepLanguage
 	}
 	return s - 1
 }
@@ -408,7 +408,7 @@ func (w settingsWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tab", "right":
 			w.enterStep(nextStep(w.step))
 		case "shift+tab", "left", "backspace":
-			if w.step == stepProvider {
+			if w.step == stepLanguage {
 				// Backing out of the first step = exit without saving
 				w.aborted = true
 				return w, tea.Quit

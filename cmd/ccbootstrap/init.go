@@ -100,12 +100,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Step 5: Proposals — AI-driven agents/rules/skills ────────────────────
-	tui.Info("Asking AI for tailored agents, rules, and skills...")
+	proposalsSpin := tui.StartSpinner("Asking AI for tailored agents, rules, and skills...")
 	proposals, err := llm.GenerateProposals(llmCfg, understanding, fp, answers)
 	if err != nil {
+		proposalsSpin.Fail("AI proposal step failed")
 		return fmt.Errorf("proposals generation failed: %w", err)
 	}
-	tui.Success(fmt.Sprintf("AI proposed %d agents, %d rules, %d skills",
+	proposalsSpin.Success(fmt.Sprintf("AI proposed %d agents, %d rules, %d skills",
 		len(proposals.Agents), len(proposals.Rules), len(proposals.Skills)))
 
 	if !initFlags.yes && !initFlags.skipQuestionnaire {
@@ -126,13 +127,15 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Step 6: Generate files — single LLM call with progress ───────────────
-	tui.Info("Generating Claude Code configuration (single LLM call)...")
+	genSpin := tui.StartSpinner("Generating Claude Code configuration (single LLM call)...")
 	genResult, err := llm.GenerateFiles(llmCfg, understanding, fp, answers,
 		selectedAgents, selectedRules, llmSkills)
 	if err != nil {
+		genSpin.Fail("File generation failed")
 		return fmt.Errorf("file generation failed: %w", err)
 	}
-	tui.Success(fmt.Sprintf("AI returned %d files", len(genResult.Files)))
+	genSpin.Success(fmt.Sprintf("AI returned %d files", len(genResult.Files)))
+	revealGeneratedFiles(genResult.Files)
 
 	// Fetch external skills (skills.sh) directly from GitHub raw.
 	if len(extSkills) > 0 {
@@ -641,6 +644,34 @@ func formatLOC(loc int) string {
 		return fmt.Sprintf("%dk LOC", loc/1000)
 	}
 	return fmt.Sprintf("%d LOC", loc)
+}
+
+// revealGeneratedFiles prints each generated file on its own line with a
+// short delay, so the user sees progressive completion instead of a single
+// dump. The underlying LLM call is synchronous, so this is an honest
+// post-hoc reveal — not fake parallel work.
+func revealGeneratedFiles(files []llm.GeneratedFile) {
+	for _, f := range files {
+		size := humanSize(len(f.Content))
+		fmt.Printf("  %s %s %s\n",
+			tui.Green("✓"),
+			f.Path,
+			tui.Dim("("+size+")"),
+		)
+		time.Sleep(35 * time.Millisecond)
+	}
+	fmt.Println()
+}
+
+func humanSize(n int) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
 }
 
 func buildTestCmdForStack(fp *analyzer.ProjectFingerprint) *exec.Cmd {

@@ -104,9 +104,8 @@ func CallLLM(cfg Config, prompt string) (string, error) {
 }
 
 // StripJSONFences removes markdown code fences, preamble/trailing text,
-// AND escapes raw control characters (newlines/tabs/CR) that the LLM sometimes
-// leaves unescaped inside JSON string values, which would otherwise break
-// json.Unmarshal with an "invalid character in string literal" error.
+// AND sanitizes invalid JSON escapes and raw control chars that LLMs
+// frequently emit inside string literals (e.g. raw newlines, `\)` escapes).
 func StripJSONFences(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if idx := strings.Index(raw, "```json"); idx != -1 {
@@ -127,49 +126,92 @@ func StripJSONFences(raw string) string {
 	if end := strings.LastIndex(raw, "}"); end != -1 && end < len(raw)-1 {
 		raw = raw[:end+1]
 	}
-	return escapeControlCharsInStrings(raw)
+	return sanitizeJSONStrings(raw)
 }
 
-// escapeControlCharsInStrings walks the input and escapes unescaped \n, \r,
-// and \t that appear INSIDE JSON string literals. Everything outside strings
-// is left untouched.
-func escapeControlCharsInStrings(raw string) string {
+// sanitizeJSONStrings walks the input as a JSON-aware state machine and
+// repairs the most common LLM output bugs inside string literals:
+//
+//  1. Raw control chars (0x00-0x1F) — newlines/tabs/CR get escaped to \n/\t/\r,
+//     anything else gets \uXXXX.
+//  2. Invalid backslash escapes — JSON only allows \" \\ \/ \b \f \n \r \t \uXXXX.
+//     Anything else (e.g. "\)", "\(", "\!", "\a") would crash json.Unmarshal.
+//     We double the backslash so "\)" becomes "\\)", which parses correctly
+//     as the literal two characters `\)` — preserving the LLM's intent.
+//  3. Malformed \uXXXX (fewer than 4 hex digits) — backslash is doubled.
+//
+// Everything OUTSIDE string literals is left untouched.
+func sanitizeJSONStrings(raw string) string {
+	runes := []rune(raw)
 	var b strings.Builder
-	b.Grow(len(raw))
+	b.Grow(len(raw) + 16)
 	inString := false
-	escaped := false
-	for _, r := range raw {
-		if escaped {
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+
+		if !inString {
+			if r == '"' {
+				inString = true
+			}
 			b.WriteRune(r)
-			escaped = false
 			continue
 		}
-		if r == '\\' {
+
+		// Inside a string literal.
+		switch r {
+		case '"':
+			inString = false
 			b.WriteRune(r)
-			escaped = true
-			continue
-		}
-		if r == '"' {
-			b.WriteRune(r)
-			inString = !inString
-			continue
-		}
-		if inString {
-			switch r {
-			case '\n':
-				b.WriteString(`\n`)
-				continue
-			case '\r':
-				b.WriteString(`\r`)
-				continue
-			case '\t':
-				b.WriteString(`\t`)
+		case '\\':
+			if i+1 >= len(runes) {
+				// Trailing lone backslash — double it.
+				b.WriteString(`\\`)
 				continue
 			}
+			next := runes[i+1]
+			switch next {
+			case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
+				b.WriteRune(r)
+				b.WriteRune(next)
+				i++
+			case 'u':
+				if i+5 < len(runes) &&
+					isHexDigit(runes[i+2]) && isHexDigit(runes[i+3]) &&
+					isHexDigit(runes[i+4]) && isHexDigit(runes[i+5]) {
+					b.WriteRune(r)
+					b.WriteRune(next)
+					b.WriteRune(runes[i+2])
+					b.WriteRune(runes[i+3])
+					b.WriteRune(runes[i+4])
+					b.WriteRune(runes[i+5])
+					i += 5
+				} else {
+					// Malformed \u — preserve as literal `\u` content.
+					b.WriteString(`\\`)
+				}
+			default:
+				// Invalid escape — preserve as literal backslash + char.
+				b.WriteString(`\\`)
+			}
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if r < 0x20 {
+				b.WriteString(fmt.Sprintf(`\u%04x`, r))
+			} else {
+				b.WriteRune(r)
+			}
 		}
-		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+func isHexDigit(r rune) bool {
+	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
 }
 
 // ─── OpenAI ──────────────────────────────────────────────────────────────────
