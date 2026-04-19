@@ -15,9 +15,10 @@ var Version = "0.2.0"
 var rootCmd = &cobra.Command{
 	Use:   "ccbootstrap",
 	Short: "Claude Code Project Bootstrapper for Mac Apple Silicon",
-	Long: `ccbootstrap — Analyze any GitHub repo and automatically generate
-a complete Claude Code configuration (CLAUDE.md, .claude/, docs/).
-Everything automated: clone, analyze, questionnaire, generate, commit, push, PR.`,
+	Long: `ccbootstrap — Analyze any codebase and let AI generate a tailored
+Claude Code configuration (CLAUDE.md, .claude/, docs/).
+Flow: analyze → wizard (AI-driven questions) → propose agents/rules/skills → generate.
+No git push or PR — the tool writes files and hands control back to you.`,
 	Version: Version,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Ensure config dir exists on every command

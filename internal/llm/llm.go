@@ -47,32 +47,57 @@ type Config struct {
 
 // UnderstandProject dispatches to the correct provider
 func UnderstandProject(cfg Config, prompt string) (*ProjectUnderstanding, error) {
-	// Truncate only if MaxContextChars is set
+	raw, err := CallLLM(cfg, prompt)
+	if err != nil {
+		return nil, err
+	}
+	return parseJSON(raw)
+}
+
+// CallLLM is a generic dispatcher that calls the configured provider and
+// returns raw text. Used by UnderstandProject, wizard, proposals, and generator.
+func CallLLM(cfg Config, prompt string) (string, error) {
 	if cfg.MaxContextChars > 0 && len(prompt) > cfg.MaxContextChars {
 		prompt = prompt[:cfg.MaxContextChars] + "\n\n[ content truncated to fit context limit ]"
 	}
 
-	var raw string
-	var err error
-
 	switch cfg.Provider {
 	case ProviderGemini:
-		raw, err = callGemini(cfg.APIKey, cfg.Model, prompt)
+		return callGemini(cfg.APIKey, cfg.Model, prompt)
 	case ProviderOllama:
 		url := cfg.OllamaURL
 		if url == "" {
 			url = "http://localhost:11434"
 		}
-		raw, err = callOllama(url, cfg.Model, prompt)
-	default: // openai
-		raw, err = callOpenAI(cfg.APIKey, cfg.Model, prompt)
+		return callOllama(url, cfg.Model, prompt)
+	default:
+		return callOpenAI(cfg.APIKey, cfg.Model, prompt)
 	}
+}
 
-	if err != nil {
-		return nil, err
+// StripJSONFences removes markdown code fences and preamble/trailing text
+// around a JSON payload returned by the LLM.
+func StripJSONFences(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if idx := strings.Index(raw, "```json"); idx != -1 {
+		raw = raw[idx+7:]
+		if end := strings.LastIndex(raw, "```"); end != -1 {
+			raw = raw[:end]
+		}
+	} else if idx := strings.Index(raw, "```"); idx != -1 {
+		raw = raw[idx+3:]
+		if end := strings.LastIndex(raw, "```"); end != -1 {
+			raw = raw[:end]
+		}
 	}
-
-	return parseJSON(raw)
+	raw = strings.TrimSpace(raw)
+	if start := strings.Index(raw, "{"); start > 0 {
+		raw = raw[start:]
+	}
+	if end := strings.LastIndex(raw, "}"); end != -1 && end < len(raw)-1 {
+		raw = raw[:end+1]
+	}
+	return raw
 }
 
 // ─── OpenAI ──────────────────────────────────────────────────────────────────
@@ -104,7 +129,7 @@ func callOpenAI(apiKey, model, prompt string) (string, error) {
 		Model:       model,
 		Messages:    []openAIMessage{{Role: "user", Content: prompt}},
 		Temperature: 0.1,
-		MaxTokens:   8192, // enough for full project analysis
+		MaxTokens:   16384, // large enough for full file generation step
 	})
 	req, _ := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+apiKey)
@@ -222,7 +247,7 @@ func callOllama(baseURL, model, prompt string) (string, error) {
 		Model:       model,
 		Messages:    []openAIMessage{{Role: "user", Content: prompt}},
 		Temperature: 0.1,
-		MaxTokens:   2048,
+		MaxTokens:   8192,
 	})
 	url := strings.TrimRight(baseURL, "/") + "/v1/chat/completions"
 	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
@@ -250,7 +275,7 @@ func callOllama(baseURL, model, prompt string) (string, error) {
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
 func httpDo(req *http.Request) ([]byte, error) {
-	client := &http.Client{Timeout: 90 * time.Second}
+	client := &http.Client{Timeout: 300 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
@@ -260,30 +285,7 @@ func httpDo(req *http.Request) ([]byte, error) {
 }
 
 func parseJSON(raw string) (*ProjectUnderstanding, error) {
-	raw = strings.TrimSpace(raw)
-
-	// Strip markdown code fences (```json ... ``` or ``` ... ```)
-	if idx := strings.Index(raw, "```json"); idx != -1 {
-		raw = raw[idx+7:]
-		if end := strings.LastIndex(raw, "```"); end != -1 {
-			raw = raw[:end]
-		}
-	} else if idx := strings.Index(raw, "```"); idx != -1 {
-		raw = raw[idx+3:]
-		if end := strings.LastIndex(raw, "```"); end != -1 {
-			raw = raw[:end]
-		}
-	}
-	raw = strings.TrimSpace(raw)
-
-	// Find the first '{' in case there's any preamble text
-	if start := strings.Index(raw, "{"); start > 0 {
-		raw = raw[start:]
-	}
-	// Find the last '}' in case there's trailing text
-	if end := strings.LastIndex(raw, "}"); end != -1 && end < len(raw)-1 {
-		raw = raw[:end+1]
-	}
+	raw = StripJSONFences(raw)
 
 	var u ProjectUnderstanding
 	if err := json.Unmarshal([]byte(raw), &u); err != nil {

@@ -4,88 +4,103 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/abdessama-cto/ccb/internal/analyzer"
 	"github.com/abdessama-cto/ccb/internal/llm"
+	"github.com/abdessama-cto/ccb/internal/tui"
 )
 
-// Questionnaire holds answers from the interactive setup
+// Questionnaire holds the hook-related settings derived from profile defaults.
+// Dynamic project questions now live in the wizard (llm.WizardQuestion).
 type Questionnaire struct {
-	Goal             string // quality | ship-fast | stability | refactor
-	WorkflowStyle    string // plan-execute | vibe | spec-driven
-	TeamSize         string // solo | small | medium | large
-	AutoFormatHook   bool
-	SecretScanHook   bool
-	AutoCommitHook   bool
-	DesktopNotify    bool
-	PushGuardHook    bool
-	AuditLogHook     bool
-	InstallSkills    bool
-	RunTests         bool
-	CreatePR         bool
-	BranchName       string
+	AutoFormatHook bool
+	SecretScanHook bool
+	AutoCommitHook bool
+	DesktopNotify  bool
+	PushGuardHook  bool
+	AuditLogHook   bool
+	InstallSkills  bool
+	RunTests       bool
 }
 
-// Generate creates the full Claude Code config in targetDir
-func Generate(targetDir string, fp *analyzer.ProjectFingerprint, q *Questionnaire, understanding *llm.ProjectUnderstanding) error {
-	dirs := []string{
-		filepath.Join(targetDir, ".claude", "rules"),
-		filepath.Join(targetDir, ".claude", "hooks"),
-		filepath.Join(targetDir, ".claude", "commands"),
-		filepath.Join(targetDir, ".claude", "agents"),
-		filepath.Join(targetDir, "docs", "decisions"),
-		filepath.Join(targetDir, "docs", "solutions"),
-		filepath.Join(targetDir, "docs", "brainstorms"),
-	}
-	for _, d := range dirs {
-		if err := os.MkdirAll(d, 0755); err != nil {
-			return fmt.Errorf("mkdir %s: %w", d, err)
-		}
+// Generate writes the Claude Code configuration to targetDir.
+// It writes two kinds of files:
+//   1. LLM-generated content (CLAUDE.md, rules, agents, skills, docs/architecture.md)
+//   2. Deterministic infrastructure (settings.json, hooks/*.sh, commands/*.md, docs/progress.md)
+func Generate(
+	targetDir string,
+	fp *analyzer.ProjectFingerprint,
+	q *Questionnaire,
+	understanding *llm.ProjectUnderstanding,
+	llmFiles []llm.GeneratedFile,
+) error {
+	if err := ensureDirs(targetDir); err != nil {
+		return err
 	}
 
-	files := map[string]string{
-		filepath.Join(targetDir, "CLAUDE.md"):                                   generateClaudeMD(fp, q, understanding),
-		filepath.Join(targetDir, ".claude", "settings.json"):                    generateSettings(fp, q),
-		filepath.Join(targetDir, ".claude", "rules", "01-core-behavior.md"):     generateCoreRules(q),
-		filepath.Join(targetDir, ".claude", "rules", "02-git-workflow.md"):      generateGitRules(q),
-		filepath.Join(targetDir, ".claude", "rules", "03-testing.md"):           generateTestingRules(fp, q),
-		filepath.Join(targetDir, ".claude", "rules", "04-code-quality.md"):      generateQualityRules(fp),
-		filepath.Join(targetDir, ".claude", "commands", "context.md"):           generateContextCommand(),
-		filepath.Join(targetDir, ".claude", "commands", "ship.md"):              generateShipCommand(fp),
-		filepath.Join(targetDir, ".claude", "commands", "review.md"):            generateReviewCommand(),
-		filepath.Join(targetDir, ".claude", "commands", "test.md"):              generateTestCommand(fp),
-		filepath.Join(targetDir, ".claude", "commands", "progress.md"):          generateProgressCommand(),
-		filepath.Join(targetDir, "docs", "architecture.md"):                     generateArchitectureMD(fp, understanding),
-		filepath.Join(targetDir, "docs", "progress.md"):                         generateProgressMD(),
+	// Deterministic structural files — always written.
+	deterministic := map[string]string{
+		filepath.Join(targetDir, ".claude", "settings.json"):           generateSettings(fp, q),
+		filepath.Join(targetDir, ".claude", "commands", "context.md"):  generateContextCommand(),
+		filepath.Join(targetDir, ".claude", "commands", "ship.md"):     generateShipCommand(fp),
+		filepath.Join(targetDir, ".claude", "commands", "review.md"):   generateReviewCommand(),
+		filepath.Join(targetDir, ".claude", "commands", "test.md"):     generateTestCommand(fp),
+		filepath.Join(targetDir, ".claude", "commands", "progress.md"): generateProgressCommand(),
+		filepath.Join(targetDir, "docs", "progress.md"):                generateProgressMD(),
 	}
 
 	// Conditional hooks
 	if q.AutoFormatHook {
-		files[filepath.Join(targetDir, ".claude", "hooks", "post-edit-format.sh")] = hookAutoFormat(fp)
+		deterministic[filepath.Join(targetDir, ".claude", "hooks", "post-edit-format.sh")] = hookAutoFormat(fp)
 	}
-	files[filepath.Join(targetDir, ".claude", "hooks", "session-start-context.sh")] = hookSessionStart()
+	deterministic[filepath.Join(targetDir, ".claude", "hooks", "session-start-context.sh")] = hookSessionStart()
 	if q.SecretScanHook {
-		files[filepath.Join(targetDir, ".claude", "hooks", "pre-edit-secret-scan.sh")] = hookSecretScan()
+		deterministic[filepath.Join(targetDir, ".claude", "hooks", "pre-edit-secret-scan.sh")] = hookSecretScan()
 	}
 	if q.AutoCommitHook {
-		files[filepath.Join(targetDir, ".claude", "hooks", "post-edit-auto-commit.sh")] = hookAutoCommit()
+		deterministic[filepath.Join(targetDir, ".claude", "hooks", "post-edit-auto-commit.sh")] = hookAutoCommit()
 	}
 	if q.DesktopNotify {
-		files[filepath.Join(targetDir, ".claude", "hooks", "stop-notify.sh")] = hookStopNotify()
+		deterministic[filepath.Join(targetDir, ".claude", "hooks", "stop-notify.sh")] = hookStopNotify()
 	}
 	if q.PushGuardHook {
-		files[filepath.Join(targetDir, ".claude", "hooks", "pre-push-tests.sh")] = hookPrePushTests(fp)
+		deterministic[filepath.Join(targetDir, ".claude", "hooks", "pre-push-tests.sh")] = hookPrePushTests(fp)
 	}
 	if q.AuditLogHook {
-		files[filepath.Join(targetDir, ".claude", "hooks", "pre-bash-audit.sh")] = hookAuditLog()
+		deterministic[filepath.Join(targetDir, ".claude", "hooks", "pre-bash-audit.sh")] = hookAuditLog()
 	}
 
-	for path, content := range files {
-		if err := writeFile(path, content); err != nil {
-			return fmt.Errorf("write %s: %w", path, err)
+	// ── Write LLM-generated files with progress display ─────────────────────
+	if len(llmFiles) > 0 {
+		fmt.Println()
+		tui.Info("Writing AI-generated files:")
+		if err := writeWithProgress(targetDir, llmFiles); err != nil {
+			return err
 		}
+	}
+
+	// ── Write deterministic files ─────────────────────────────────────────────
+	tui.Info("Writing infrastructure files (settings, hooks, commands):")
+	paths := make([]string, 0, len(deterministic))
+	for p := range deterministic {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		if err := writeFile(p, deterministic[p]); err != nil {
+			return fmt.Errorf("write %s: %w", p, err)
+		}
+		rel, _ := filepath.Rel(targetDir, p)
+		fmt.Printf("  %s %s\n", tui.Green("✓"), tui.Dim(rel))
+	}
+
+	// Fallback: if the LLM didn't produce docs/architecture.md, write a stub.
+	archPath := filepath.Join(targetDir, "docs", "architecture.md")
+	if _, err := os.Stat(archPath); os.IsNotExist(err) {
+		_ = writeFile(archPath, generateArchitectureStub(fp, understanding))
 	}
 
 	// Make hooks executable
@@ -98,105 +113,48 @@ func Generate(targetDir string, fp *analyzer.ProjectFingerprint, q *Questionnair
 	return nil
 }
 
-// ─── CLAUDE.md ────────────────────────────────────────────────────────────────
-
-func generateClaudeMD(fp *analyzer.ProjectFingerprint, q *Questionnaire, understanding *llm.ProjectUnderstanding) string {
-	repoName := repoNameFromURL(fp.RepoURL)
-
-	// Use AI understanding if available
-	purposeSection := "_No AI understanding available — add your OpenAI key with: ccbootstrap settings_"
-	archSection := ""
-	featuresSection := ""
-	moduleSection := ""
-	conventionsSection := ""
-	whatClaudeSection := ""
-	extServicesSection := ""
-
-	if understanding != nil {
-		if understanding.ProjectName != "" {
-			repoName = understanding.ProjectName
-		}
-		if understanding.Purpose != "" {
-			purposeSection = understanding.Purpose
-		}
-		if understanding.Architecture != "" {
-			archSection = "\n## Architecture\n" + understanding.Architecture
-		}
-		if len(understanding.KeyFeatures) > 0 {
-			featuresSection = "\n## Key Features\n" + formatList(understanding.KeyFeatures)
-		}
-		if len(understanding.MainModules) > 0 {
-			moduleSection = "\n## Main Modules\n" + formatList(understanding.MainModules)
-		}
-		if len(understanding.Conventions) > 0 {
-			conventionsSection = "\n## Project-Specific Conventions\n" + formatList(understanding.Conventions)
-		}
-		if understanding.WhatClaudeKnows != "" {
-			whatClaudeSection = "\n## What Claude Should Know\n" + understanding.WhatClaudeKnows
-		}
-		if len(understanding.ExternalServices) > 0 {
-			extServicesSection = "\n## External Services\n" + formatList(understanding.ExternalServices)
+func ensureDirs(targetDir string) error {
+	dirs := []string{
+		filepath.Join(targetDir, ".claude", "rules"),
+		filepath.Join(targetDir, ".claude", "hooks"),
+		filepath.Join(targetDir, ".claude", "commands"),
+		filepath.Join(targetDir, ".claude", "agents"),
+		filepath.Join(targetDir, ".claude", "skills"),
+		filepath.Join(targetDir, "docs", "decisions"),
+		filepath.Join(targetDir, "docs", "solutions"),
+		filepath.Join(targetDir, "docs", "brainstorms"),
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", d, err)
 		}
 	}
+	return nil
+}
 
-	return fmt.Sprintf(`# Project: %s
+func writeWithProgress(targetDir string, files []llm.GeneratedFile) error {
+	// Sort by path for predictable output
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 
-> Generated by [ccbootstrap](https://github.com/abdessama-cto/ccb) on %s
+	for _, f := range files {
+		full := filepath.Join(targetDir, f.Path)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", filepath.Dir(full), err)
+		}
+		if err := writeFile(full, f.Content); err != nil {
+			return fmt.Errorf("write %s: %w", f.Path, err)
+		}
+		size := formatBytes(len(f.Content))
+		fmt.Printf("  %s %-50s %s\n", tui.Green("✓"), f.Path, tui.Dim(size))
+	}
+	return nil
+}
 
-## Purpose
-%s
-%s%s%s%s%s%s
-## Tech Stack
-%s
-## Project Profile
-- **Goal**: %s
-- **Workflow**: %s
-- **Team size**: %s
-- **LOC**: %s across %d files
-- **Commits**: %d (%s)
-- **Tests**: %s
-- **CI/CD**: %s
-- **Docker**: %s
-
-## Commands
-| Command | Purpose |
-|---|---|
-%s
-
-## Strict Rules
-- Never refactor code outside the scope of the requested task
-- Always confirm before modifying files outside the main task scope
-- Read @docs/solutions/ before proposing solutions to recurring problems
-- Update @docs/progress.md at the end of each session
-
-## References
-- @docs/architecture.md — full architecture details
-- @docs/decisions/ — Architecture Decision Records
-- @docs/solutions/ — Solved problems with context
-- @docs/progress.md — current session progress
-`,
-		repoName,
-		time.Now().Format("2006-01-02"),
-		purposeSection,
-		archSection,
-		featuresSection,
-		moduleSection,
-		conventionsSection,
-		whatClaudeSection,
-		extServicesSection,
-		formatStack(fp.Stack),
-		q.Goal,
-		q.WorkflowStyle,
-		q.TeamSize,
-		formatLOC(fp.LOC),
-		fp.Files,
-		fp.Commits,
-		fp.Age,
-		fp.TestFrameworksString(),
-		boolEmoji(fp.HasCI),
-		boolEmoji(fp.HasDocker),
-		buildCommandsTable(fp),
-	)
+func formatBytes(n int) string {
+	if n < 1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	return fmt.Sprintf("%.1f KB", float64(n)/1024)
 }
 
 // ─── .claude/settings.json ────────────────────────────────────────────────────
@@ -280,92 +238,7 @@ func buildAskList(fp *analyzer.ProjectFingerprint) string {
 	return "\n      " + strings.Join(asks, ",\n      ")
 }
 
-// ─── Rules ────────────────────────────────────────────────────────────────────
-
-func generateCoreRules(q *Questionnaire) string {
-	workflowDesc := map[string]string{
-		"plan-execute": "Always plan before implementing. Write a brief plan in a code block, wait for confirmation, then execute.",
-		"vibe":         "Move fast and iterate. Implement directly, explain as you go.",
-		"spec-driven":  "Follow the spec strictly. Ask for clarification on ambiguities before implementing.",
-	}
-	return fmt.Sprintf(`# Core Behavior Rules
-
-## Workflow Style: %s
-%s
-
-## General Rules
-- Be concise and precise in explanations
-- Don't add unrequested features or refactor out-of-scope code
-- Prefer editing existing code over creating new files when possible
-- Always read before writing — understand the context first
-
-## Goal Alignment: %s
-- Prioritize %s over speed
-- Ask before breaking changes
-`,
-		q.WorkflowStyle,
-		workflowDesc[q.WorkflowStyle],
-		q.Goal,
-		q.Goal,
-	)
-}
-
-func generateGitRules(q *Questionnaire) string {
-	return `# Git Workflow Rules
-
-## Branching
-- Never commit directly to main/master
-- Use descriptive branch names: feat/, fix/, chore/, refactor/
-- One feature per branch
-
-## Commits
-- Follow Conventional Commits: feat:, fix:, chore:, docs:, refactor:, test:
-- Keep commits atomic and focused
-- Write commit messages in present tense
-
-## PR Guidelines
-- Open a PR for every feature or fix
-- Describe what changed and why in the PR body
-- Link related issues
-`
-}
-
-func generateTestingRules(fp *analyzer.ProjectFingerprint, q *Questionnaire) string {
-	testCmd := buildTestCommand(fp)
-	return fmt.Sprintf(`# Testing Rules
-
-## Test Command
-` + "```bash\n" + testCmd + "\n```" + `
-
-## Rules
-- Write a test for every new feature or bug fix
-- Run the test suite before committing
-- Do not modify tests to make them pass — fix the implementation
-- Tests must be green before pushing
-`)
-}
-
-func generateQualityRules(fp *analyzer.ProjectFingerprint) string {
-	return fmt.Sprintf(`# Code Quality Rules
-
-## Language: %s
-
-## Principles
-- Keep functions small and focused (< 50 lines)
-- Avoid deeply nested conditionals (max 3 levels)
-- Prefer explicit over implicit
-- No commented-out code in PRs
-- Remove unused imports and variables
-
-## Security
-- Never hardcode secrets or API keys
-- Use environment variables for configuration
-- Validate all user inputs
-- Use parameterized queries for database access
-`, fp.Language)
-}
-
-// ─── Commands ─────────────────────────────────────────────────────────────────
+// ─── Commands (.claude/commands/*.md) ─────────────────────────────────────────
 
 func generateContextCommand() string {
 	return `# /context — Show current context usage and project state
@@ -384,7 +257,7 @@ func generateShipCommand(fp *analyzer.ProjectFingerprint) string {
 	return fmt.Sprintf(`# /ship — Prepare and ship current changes
 
 Execute this sequence:
-1. Run the test suite: ` + "`%s`" + `
+1. Run the test suite: `+"`%s`"+`
 2. If tests fail, stop and report failures
 3. Run git diff --staged to review changes
 4. Create a conventional commit message based on the changes
@@ -436,7 +309,7 @@ Keep entries concise (< 10 lines each).
 `
 }
 
-// ─── Hooks ────────────────────────────────────────────────────────────────────
+// ─── Hooks (.claude/hooks/*.sh) ───────────────────────────────────────────────
 
 func hookAutoFormat(fp *analyzer.ProjectFingerprint) string {
 	return `#!/bin/bash
@@ -560,35 +433,19 @@ exit 0
 
 // ─── Docs ─────────────────────────────────────────────────────────────────────
 
-func generateArchitectureMD(fp *analyzer.ProjectFingerprint, understanding *llm.ProjectUnderstanding) string {
-	if understanding != nil && understanding.Architecture != "" {
-		endpoints := ""
-		if len(understanding.APIEndpoints) > 0 {
-			endpoints = "\n## API Endpoints\n" + formatList(understanding.APIEndpoints)
-		}
-		modules := ""
-		if len(understanding.MainModules) > 0 {
-			modules = "\n## Modules\n" + formatList(understanding.MainModules)
-		}
-		tech := ""
-		if understanding.TechNotes != "" {
-			tech = "\n## Technical Notes\n" + understanding.TechNotes
-		}
+func generateArchitectureStub(fp *analyzer.ProjectFingerprint, u *llm.ProjectUnderstanding) string {
+	if u != nil && u.Architecture != "" {
 		return fmt.Sprintf(`# Architecture
 
-> Auto-generated by ccbootstrap with AI analysis.
+> Auto-generated fallback — the AI did not produce docs/architecture.md this run.
 
 ## Overview
 %s
 
 ## Stack
-%s%s%s%s
-## External Services
 %s
-`, understanding.Architecture, formatStack(fp.Stack), modules, endpoints, tech,
-			formatList(understanding.ExternalServices))
+`, u.Architecture, formatStack(fp.Stack))
 	}
-	// Fallback: static
 	return fmt.Sprintf(`# Architecture
 
 > Auto-generated by ccbootstrap — update this file to reflect the real architecture.
@@ -598,15 +455,6 @@ func generateArchitectureMD(fp *analyzer.ProjectFingerprint, understanding *llm.
 
 ## Structure
 _Document your directory structure here._
-
-## Key Design Decisions
-_See docs/decisions/ for Architecture Decision Records._
-
-## Data Flow
-_Describe how data flows through the system._
-
-## External Dependencies
-_List external services, APIs, and their purposes._
 `, formatStack(fp.Stack))
 }
 
@@ -619,8 +467,8 @@ func generateProgressMD() string {
 - ✅ Generated CLAUDE.md, .claude/, docs/ structure
 
 ## Next Steps
-- [ ] Review and update CLAUDE.md with project-specific context
-- [ ] Add architecture details to docs/architecture.md
+- [ ] Review the AI-generated CLAUDE.md and refine
+- [ ] Review .claude/rules/ and adjust if needed
 - [ ] Start development
 `, time.Now().Format("2006-01-02"))
 }
@@ -628,20 +476,10 @@ func generateProgressMD() string {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 func writeFile(path, content string) error {
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	return nil
-}
-
-func repoNameFromURL(url string) string {
-	u := strings.TrimSuffix(url, ".git")
-	u = strings.TrimSuffix(u, "/")
-	parts := strings.Split(u, "/")
-	if len(parts) > 0 {
-		return parts[len(parts)-1]
-	}
-	return "project"
+	return os.WriteFile(path, []byte(content), 0644)
 }
 
 func formatStack(stack []string) string {
@@ -650,20 +488,6 @@ func formatStack(stack []string) string {
 		result += "- " + s + "\n"
 	}
 	return result
-}
-
-func formatLOC(loc int) string {
-	if loc >= 1000 {
-		return fmt.Sprintf("%dk", loc/1000)
-	}
-	return fmt.Sprintf("%d", loc)
-}
-
-func boolEmoji(v bool) string {
-	if v {
-		return "✅"
-	}
-	return "❌"
 }
 
 func buildTestCommand(fp *analyzer.ProjectFingerprint) string {
@@ -682,54 +506,4 @@ func buildTestCommand(fp *analyzer.ProjectFingerprint) string {
 		}
 	}
 	return "# No test command detected — add yours here"
-}
-
-func buildCommandsTable(fp *analyzer.ProjectFingerprint) string {
-	var rows []string
-	for _, s := range fp.Stack {
-		switch {
-		case strings.Contains(s, "Laravel"):
-			rows = append(rows,
-				"| `php artisan serve` | Start dev server |",
-				"| `php artisan test --parallel` | Run test suite |",
-				"| `php artisan migrate` | Run migrations |",
-				"| `composer install` | Install PHP deps |",
-			)
-		case strings.Contains(s, "Next"):
-			rows = append(rows,
-				"| `npm run dev` | Start dev server |",
-				"| `npm test` | Run test suite |",
-				"| `npm run build` | Production build |",
-			)
-		case strings.Contains(s, "NestJS"):
-			rows = append(rows,
-				"| `npm run start:dev` | Start dev server |",
-				"| `npm test` | Run test suite |",
-				"| `npm run build` | Production build |",
-			)
-		case s == "Go" || strings.HasPrefix(s, "Go/"):
-			rows = append(rows,
-				"| `go run .` | Start app |",
-				"| `go test ./...` | Run test suite |",
-				"| `go build -o app .` | Build binary |",
-			)
-		case strings.Contains(s, "Django"):
-			rows = append(rows,
-				"| `python manage.py runserver` | Start dev server |",
-				"| `pytest` | Run test suite |",
-				"| `python manage.py migrate` | Run migrations |",
-			)
-		}
-	}
-	if len(rows) == 0 {
-		rows = append(rows, "| _(add your commands here)_ | _ |")
-	}
-	return strings.Join(rows, "\n")
-}
-func formatList(items []string) string {
-	result := ""
-	for _, item := range items {
-		result += "- " + item + "\n"
-	}
-	return result
 }
