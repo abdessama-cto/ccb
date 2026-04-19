@@ -271,37 +271,68 @@ func runInit(cmd *cobra.Command, args []string) error {
 // ─── Questionnaire ────────────────────────────────────────────────────────────
 
 func runQuestionnaire(fp *analyzer.ProjectFingerprint) (*generator.Questionnaire, error) {
-	fmt.Printf("\n%s Quick setup — answer %s questions\n\n",
+	fmt.Printf("\n%s Quick setup — answer %s questions\n",
 		tui.Bold("📝"), tui.Cyan("10"))
+	fmt.Println(tui.Dim("  Your answers shape the rules and hooks Claude will follow for this project.\n"))
 
 	q := &generator.Questionnaire{}
 	reader := bufio.NewReader(os.Stdin)
 
-	q.Goal = selectOption(reader, "1/10 Primary goal?", []string{
-		"quality", "ship-fast", "stability", "refactor",
-	}, "quality")
+	q.Goal = selectOptionDesc(reader, "1/10", "Primary goal?",
+		"What should Claude optimise for in this project?",
+		[]optionDesc{
+			{val: "quality", label: "Quality", desc: "Correctness first. Claude writes tests, reviews carefully, avoids shortcuts."},
+			{val: "ship-fast", label: "Ship fast", desc: "Speed first. Claude moves quickly, iterates, minimal ceremony."},
+			{val: "stability", label: "Stability", desc: "Safety first. Claude is conservative, avoids breaking changes, prefers refactors."},
+			{val: "refactor", label: "Refactor", desc: "Clean-up mode. Claude focuses on improving existing code, not adding features."},
+		}, "quality")
 
-	q.WorkflowStyle = selectOption(reader, "2/10 Workflow style?", []string{
-		"plan-execute", "vibe", "spec-driven",
-	}, "plan-execute")
+	q.WorkflowStyle = selectOptionDesc(reader, "2/10", "Workflow style?",
+		"How does Claude approach tasks?",
+		[]optionDesc{
+			{val: "plan-execute", label: "Plan → Execute", desc: "Claude writes a plan first, waits for your approval, then implements. Safest."},
+			{val: "vibe", label: "Vibe", desc: "Claude implements directly and explains as it goes. Fast and fluid."},
+			{val: "spec-driven", label: "Spec-driven", desc: "Claude follows a spec strictly and asks for clarification on ambiguities."},
+		}, "plan-execute")
 
-	q.TeamSize = selectOption(reader, "3/10 Team size?", []string{
-		"solo", "small (2-5)", "medium (5-15)", "large (15+)",
-	}, "solo")
+	q.TeamSize = selectOptionDesc(reader, "3/10", "Team size?",
+		"Affects strictness of git and PR rules.",
+		[]optionDesc{
+			{val: "solo", label: "Solo", desc: "Just you. Relaxed rules, no mandatory PR reviews."},
+			{val: "small (2-5)", label: "Small (2-5)", desc: "Small team. PRs encouraged, branch protection recommended."},
+			{val: "medium (5-15)", label: "Medium (5-15)", desc: "Mid-size team. Strict branching, required reviews, CI gates."},
+			{val: "large (15+)", label: "Large (15+)", desc: "Large team. Full governance: protected branches, changelogs, audit logs."},
+		}, "solo")
 
-	q.AutoFormatHook = confirmQ(reader, "4/10 Auto-format files after each edit?", true)
-	q.SecretScanHook = confirmQ(reader, "5/10 Scan for secrets before writing files?", true)
-	q.AutoCommitHook = confirmQ(reader, "6/10 Auto-commit after each edit (on feature branches)?", false)
-	q.DesktopNotify = confirmQ(reader, "7/10 Desktop notification when Claude finishes a task?", true)
-	q.PushGuardHook = confirmQ(reader, "8/10 Block git push if tests fail?", len(fp.TestFrameworks) > 0)
-	q.AuditLogHook = confirmQ(reader, "9/10 Audit log of all bash commands?", false)
-	q.InstallSkills = confirmQ(reader, "10/10 Install recommended skills?", true)
+	q.AutoFormatHook = confirmQDesc(reader, "4/10", "Auto-format files after each edit?",
+		"Runs prettier/gofmt/pint on every file Claude edits. Zero-config cleanup.", true)
+
+	q.SecretScanHook = confirmQDesc(reader, "5/10", "Scan for secrets before writing files?",
+		"Blocks Claude if it tries to write an API key, private key, or token into a file.", true)
+
+	q.AutoCommitHook = confirmQDesc(reader, "6/10", "Auto-commit after each edit?",
+		"Creates an atomic git commit after every file change (on non-main branches only). Good for granular history.", false)
+
+	q.DesktopNotify = confirmQDesc(reader, "7/10", "Desktop notification when Claude finishes a task?",
+		"macOS notification when Claude stops. Useful if you step away while it works.", true)
+
+	q.PushGuardHook = confirmQDesc(reader, "8/10", "Block git push if tests fail?",
+		"Runs the test suite before every push. Claude cannot push broken code.",
+		len(fp.TestFrameworks) > 0)
+
+	q.AuditLogHook = confirmQDesc(reader, "9/10", "Audit log of all bash commands?",
+		"Writes every bash command Claude runs to .claude/audit/bash-commands.log with timestamp.", false)
+
+	q.InstallSkills = confirmQDesc(reader, "10/10", "Install recommended skills & agents?",
+		"Adds pre-built Claude Code skills (.claude/agents/) tailored to your stack.", true)
+
 	q.RunTests = len(fp.TestFrameworks) > 0
 	q.CreatePR = !initFlags.noPR
 
 	fmt.Printf("\n%s Questionnaire done\n\n", tui.Green("✓"))
 	return q, nil
 }
+
 
 func defaultQuestionnaire(profile string) *generator.Questionnaire {
 	q := &generator.Questionnaire{
@@ -333,6 +364,63 @@ func defaultQuestionnaire(profile string) *generator.Questionnaire {
 	return q
 }
 
+// optionDesc holds a choice value with a human-readable label and description
+type optionDesc struct {
+	val   string
+	label string
+	desc  string
+}
+
+func selectOptionDesc(r *bufio.Reader, step, prompt, subtitle string, options []optionDesc, defaultVal string) string {
+	fmt.Printf("\n  %s %s\n", tui.Bold(step), tui.Bold(prompt))
+	if subtitle != "" {
+		fmt.Printf("  %s\n", tui.Dim(subtitle))
+	}
+	for i, o := range options {
+		marker := "  "
+		if o.val == defaultVal {
+			marker = tui.Green("▶ ")
+		}
+		fmt.Printf("    %s[%d] %-20s %s\n", marker, i+1, tui.Cyan(o.label), tui.Dim(o.desc))
+	}
+	fmt.Print("  Choice (enter for default): ")
+	input, _ := r.ReadString('\n')
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return defaultVal
+	}
+	var idx int
+	if n, _ := fmt.Sscanf(input, "%d", &idx); n == 1 && idx >= 1 && idx <= len(options) {
+		return options[idx-1].val
+	}
+	return defaultVal
+}
+
+func confirmQDesc(r *bufio.Reader, step, prompt, desc string, defaultVal bool) bool {
+	hint := "Y/n"
+	if !defaultVal {
+		hint = "y/N"
+	}
+	defaultMark := ""
+	if defaultVal {
+		defaultMark = tui.Green(" (default: yes)")
+	} else {
+		defaultMark = tui.Dim(" (default: no)")
+	}
+	fmt.Printf("\n  %s %s%s\n", tui.Bold(step), tui.Bold(prompt), defaultMark)
+	if desc != "" {
+		fmt.Printf("  %s\n", tui.Dim(desc))
+	}
+	fmt.Printf("  %s ", tui.Dim("["+hint+"]:"))
+	input, _ := r.ReadString('\n')
+	input = strings.ToLower(strings.TrimSpace(input))
+	if input == "" {
+		return defaultVal
+	}
+	return input == "y" || input == "yes"
+}
+
+// Keep old helpers for settings.go compatibility
 func selectOption(r *bufio.Reader, prompt string, options []string, defaultVal string) string {
 	fmt.Printf("  %s\n", tui.Bold(prompt))
 	for i, o := range options {
@@ -369,6 +457,7 @@ func confirmQ(r *bufio.Reader, prompt string, defaultVal bool) bool {
 	}
 	return input == "y" || input == "yes"
 }
+
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
