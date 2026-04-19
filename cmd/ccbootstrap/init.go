@@ -83,6 +83,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		APIKey:          cfg.AI.ActiveKey(),
 		OllamaURL:       cfg.AI.OllamaURL,
 		MaxContextChars: contextLimitForProvider(cfg.AI.Provider),
+		Language:        cfg.UI.Language,
 	}
 
 	// ── Step 3b: Semantic AI analysis (with cache) ───────────────────────────
@@ -229,7 +230,7 @@ func resolveDestination(args []string) (destDir, repoURL string, err error) {
 
 	repoName := ghpkg.RepoNameFromURL(repoURL)
 	homeDir, _ := os.UserHomeDir()
-	projectsDir := filepath.Join(homeDir, ".ccbootstrap", "projects")
+	projectsDir := filepath.Join(homeDir, ".ccb", "projects")
 	destDir = filepath.Join(projectsDir, repoName)
 
 	if _, statErr := os.Stat(destDir); statErr == nil {

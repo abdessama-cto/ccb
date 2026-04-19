@@ -62,7 +62,7 @@ func confirmRules(p *llm.Proposals) {
 	}
 	items := make([]CheckItem, len(p.Rules))
 	for i, r := range p.Rules {
-		items[i] = CheckItem{Label: truncate(r.Rule, 42), Detail: truncate(r.Reason, 36), Selected: r.Selected}
+		items[i] = CheckItem{Label: r.Rule, Detail: r.Reason, Selected: r.Selected}
 	}
 	result := InteractiveCheckbox(
 		"📐 PROJECT RULES — .claude/rules/05-project-specific.md",

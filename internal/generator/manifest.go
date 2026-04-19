@@ -21,9 +21,18 @@ type Manifest struct {
 	BackupFrom string    `json:"backup_from,omitempty"`
 }
 
+// projectCacheDir is the per-project cache directory name.
+// Legacy bootstrapped projects may use .ccbootstrap instead.
+const projectCacheDir = ".ccb"
+
 // ManifestPath returns the absolute path to the manifest file inside the
-// project's .ccbootstrap/ cache directory.
+// project's .ccb/ cache directory (new) or .ccbootstrap/ (legacy).
 func ManifestPath(projectDir string) string {
+	return filepath.Join(projectDir, projectCacheDir, ManifestFilename)
+}
+
+// LegacyManifestPath returns the path for projects bootstrapped before the rename.
+func LegacyManifestPath(projectDir string) string {
 	return filepath.Join(projectDir, ".ccbootstrap", ManifestFilename)
 }
 
@@ -42,18 +51,22 @@ func WriteManifest(projectDir string, m Manifest) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-// LoadManifest reads a previously-written manifest. Returns nil, nil if missing.
+// LoadManifest reads the manifest from .ccb/ or falls back to .ccbootstrap/.
+// Returns nil, nil if no manifest exists in either location.
 func LoadManifest(projectDir string) (*Manifest, error) {
-	data, err := os.ReadFile(ManifestPath(projectDir))
-	if os.IsNotExist(err) {
-		return nil, nil
+	for _, path := range []string{ManifestPath(projectDir), LegacyManifestPath(projectDir)} {
+		data, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		var m Manifest
+		if err := json.Unmarshal(data, &m); err != nil {
+			return nil, err
+		}
+		return &m, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	var m Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, err
-	}
-	return &m, nil
+	return nil, nil
 }

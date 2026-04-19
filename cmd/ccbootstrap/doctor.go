@@ -150,7 +150,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		checks = append(checks, check{
 			label:   "Cached analysis",
 			status:  "warn",
-			message: "no .ccbootstrap/analysis.json — 'ccb add agent' will fail until you reanalyze",
+			message: "no .ccb/analysis.json — 'ccb add agent' will fail until you reanalyze",
 		})
 	}
 

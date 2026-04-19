@@ -411,11 +411,17 @@ func (m checkModel) View() string {
 		mainMaxVis = 5
 	}
 
-	detailWidth := m.width - 14
-	if detailWidth < 30 {
-		detailWidth = 30
+	// Compute wrap widths relative to the terminal size so nothing is cut off.
+	// Layout per row: "  ▶ ☑  <label>" — prefix takes ~8 visible chars.
+	labelWidth := m.width - 10
+	if labelWidth < 30 {
+		labelWidth = 30
 	}
-	indent := "        "
+	detailWidth := labelWidth - 2
+	if detailWidth < 28 {
+		detailWidth = 28
+	}
+	indent := "        " // 8-space hanging indent for wrapped continuation lines
 
 	for pos := 0; pos < len(vis) && pos < mainMaxVis; pos++ {
 		i := vis[pos]
@@ -426,16 +432,35 @@ func (m checkModel) View() string {
 		if !it.Selected {
 			box = styleUncheck.Render("☐")
 		}
-		label := styleLabel.Render(it.Label)
-		detail := styleDetail.Width(detailWidth).Render(it.Detail)
 
-		var row string
+		labelLines := wrapPlain(it.Label, labelWidth)
+		detailLines := wrapPlain(it.Detail, detailWidth)
+
+		var rowSB strings.Builder
+		for li, ln := range labelLines {
+			colored := styleLabel.Render(ln)
+			if isCursor {
+				colored = styleCursor.Render(ln)
+			}
+			if li == 0 {
+				if isCursor {
+					arrow := styleCursor.Render("▶")
+					rowSB.WriteString(fmt.Sprintf("  %s %s  %s", arrow, box, colored))
+				} else {
+					rowSB.WriteString(fmt.Sprintf("    %s  %s", box, colored))
+				}
+			} else {
+				rowSB.WriteString("\n" + indent + colored)
+			}
+		}
+		for _, ln := range detailLines {
+			rowSB.WriteString("\n" + indent + styleDetail.Render(ln))
+		}
+
+		row := rowSB.String()
 		if isCursor {
-			arrow := styleCursor.Render("▶")
-			row = fmt.Sprintf("  %s %s  %s\n%s%s", arrow, box, label, indent, detail)
 			sb.WriteString(styleRowActive.Render(row))
 		} else {
-			row = fmt.Sprintf("    %s  %s\n%s%s", box, label, indent, detail)
 			sb.WriteString(row)
 		}
 		sb.WriteString("\n")
@@ -502,17 +527,31 @@ func (m checkModel) View() string {
 				box = styleChecked.Render("☑")
 			}
 
-			name := styleNewSkill.Render(rs.SkillID)
-			detail := fmt.Sprintf("%s  ·  %d installs", rs.Source, rs.Installs)
-			desc := styleDetail.Width(detailWidth).Render(detail)
+			nameLines := wrapPlain(rs.SkillID, labelWidth)
+			detailLines := wrapPlain(fmt.Sprintf("%s  ·  %d installs", rs.Source, rs.Installs), detailWidth)
 
-			var row string
+			var rowSB strings.Builder
+			for li, ln := range nameLines {
+				colored := styleNewSkill.Render(ln)
+				if li == 0 {
+					if isCursor {
+						arrow := styleCursor.Render("▶")
+						rowSB.WriteString(fmt.Sprintf("  %s %s  %s", arrow, box, colored))
+					} else {
+						rowSB.WriteString(fmt.Sprintf("    %s  %s", box, colored))
+					}
+				} else {
+					rowSB.WriteString("\n" + diskIndent + colored)
+				}
+			}
+			for _, ln := range detailLines {
+				rowSB.WriteString("\n" + diskIndent + styleDetail.Render(ln))
+			}
+
+			row := rowSB.String()
 			if isCursor {
-				arrow := styleCursor.Render("▶")
-				row = fmt.Sprintf("  %s %s  %s\n%s%s", arrow, box, name, diskIndent, desc)
 				sb.WriteString(styleRowActive.Render(row))
 			} else {
-				row = fmt.Sprintf("    %s  %s\n%s%s", box, name, diskIndent, desc)
 				sb.WriteString(row)
 			}
 			sb.WriteString("\n")
@@ -589,6 +628,15 @@ func tuiWordWrap(text string, maxWidth int) string {
 		lines = append(lines, current)
 	}
 	return strings.Join(lines, "\n  ")
+}
+
+// wrapPlain wraps plain text to maxWidth, returning nil for empty input so
+// the caller doesn't render a blank line. Uses wordWrap under the hood.
+func wrapPlain(s string, maxWidth int) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return wordWrap(s, maxWidth)
 }
 
 // ─── Fallback (CI / pipes / non-TTY) ─────────────────────────────────────────

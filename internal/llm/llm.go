@@ -38,11 +38,39 @@ const (
 
 // Config is the minimal config needed to call an LLM
 type Config struct {
-	Provider       Provider
-	Model          string
-	APIKey         string   // not needed for Ollama
-	OllamaURL      string   // only for Ollama
-	MaxContextChars int     // 0 = no limit. Set per provider (Gemini 1M = ~4M chars)
+	Provider        Provider
+	Model           string
+	APIKey          string // not needed for Ollama
+	OllamaURL       string // only for Ollama
+	MaxContextChars int    // 0 = no limit. Set per provider (Gemini 1M = ~4M chars)
+	Language        string // ISO code (auto, en, fr, es, ar) — controls LLM response language
+}
+
+// LanguageName maps an ISO code to an English name the LLM understands.
+func LanguageName(code string) string {
+	switch code {
+	case "fr":
+		return "French"
+	case "es":
+		return "Spanish"
+	case "ar":
+		return "Arabic"
+	case "en":
+		return "English"
+	default:
+		return "English"
+	}
+}
+
+// LanguageDirective returns a short system directive to append to every
+// prompt so the LLM produces natural-language output in the user's language.
+func LanguageDirective(cfg Config) string {
+	lang := LanguageName(cfg.Language)
+	return fmt.Sprintf(
+		"IMPORTANT: All natural-language fields (questions, subtitles, descriptions, reasons, rule text, docs) MUST be written in %s. "+
+			"Do NOT translate identifiers, code, file paths, or JSON keys.",
+		lang,
+	)
 }
 
 // UnderstandProject dispatches to the correct provider
@@ -75,8 +103,10 @@ func CallLLM(cfg Config, prompt string) (string, error) {
 	}
 }
 
-// StripJSONFences removes markdown code fences and preamble/trailing text
-// around a JSON payload returned by the LLM.
+// StripJSONFences removes markdown code fences, preamble/trailing text,
+// AND escapes raw control characters (newlines/tabs/CR) that the LLM sometimes
+// leaves unescaped inside JSON string values, which would otherwise break
+// json.Unmarshal with an "invalid character in string literal" error.
 func StripJSONFences(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if idx := strings.Index(raw, "```json"); idx != -1 {
@@ -97,7 +127,49 @@ func StripJSONFences(raw string) string {
 	if end := strings.LastIndex(raw, "}"); end != -1 && end < len(raw)-1 {
 		raw = raw[:end+1]
 	}
-	return raw
+	return escapeControlCharsInStrings(raw)
+}
+
+// escapeControlCharsInStrings walks the input and escapes unescaped \n, \r,
+// and \t that appear INSIDE JSON string literals. Everything outside strings
+// is left untouched.
+func escapeControlCharsInStrings(raw string) string {
+	var b strings.Builder
+	b.Grow(len(raw))
+	inString := false
+	escaped := false
+	for _, r := range raw {
+		if escaped {
+			b.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if r == '\\' {
+			b.WriteRune(r)
+			escaped = true
+			continue
+		}
+		if r == '"' {
+			b.WriteRune(r)
+			inString = !inString
+			continue
+		}
+		if inString {
+			switch r {
+			case '\n':
+				b.WriteString(`\n`)
+				continue
+			case '\r':
+				b.WriteString(`\r`)
+				continue
+			case '\t':
+				b.WriteString(`\t`)
+				continue
+			}
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // ─── OpenAI ──────────────────────────────────────────────────────────────────

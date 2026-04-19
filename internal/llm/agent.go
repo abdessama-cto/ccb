@@ -19,7 +19,7 @@ type GeneratedAgent struct {
 // If nameHint is non-empty, the agent is created around that topic/name.
 // Otherwise, the LLM picks a useful gap to fill.
 func GenerateAgent(cfg Config, u *ProjectUnderstanding, fp *analyzer.ProjectFingerprint, nameHint string) (*GeneratedAgent, error) {
-	prompt := buildAgentPrompt(u, fp, nameHint)
+	prompt := buildAgentPrompt(u, fp, nameHint) + "\n\n" + LanguageDirective(cfg)
 	raw, err := CallLLM(cfg, prompt)
 	if err != nil {
 		return nil, err

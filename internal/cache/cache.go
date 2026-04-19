@@ -1,5 +1,5 @@
 // Package cache handles persisting and loading AI analysis results per project.
-// The analysis file is stored at <projectDir>/.ccbootstrap/analysis.json.
+// The analysis file is stored at <projectDir>/.ccb/analysis.json.
 package cache
 
 import (
@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	cacheDir      = ".ccbootstrap"
-	cacheFilename = "analysis.json"
+	cacheDir       = ".ccb"
+	legacyCacheDir = ".ccbootstrap" // fallback for projects bootstrapped before the rename
+	cacheFilename  = "analysis.json"
 	currentVersion = "2"
 )
 
@@ -31,7 +32,7 @@ type Analysis struct {
 	Understanding *llm.ProjectUnderstanding  `json:"understanding"`
 }
 
-// Save persists the analysis to <projectDir>/.ccbootstrap/analysis.json
+// Save persists the analysis to <projectDir>/.ccb/analysis.json
 func Save(projectDir, provider, model string, filesCount, tokensEst int,
 	fp *analyzer.ProjectFingerprint, u *llm.ProjectUnderstanding) error {
 
@@ -63,16 +64,27 @@ func Save(projectDir, provider, model string, filesCount, tokensEst int,
 	return nil
 }
 
-// Load reads the cached analysis from <projectDir>/.ccbootstrap/analysis.json.
+// Load reads the cached analysis from <projectDir>/.ccb/analysis.json, or
+// falls back to the legacy <projectDir>/.ccbootstrap/analysis.json if present.
 // Returns nil, nil if no cache exists.
 func Load(projectDir string) (*Analysis, error) {
-	path := filepath.Join(projectDir, cacheDir, cacheFilename)
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil, nil
+	candidates := []string{
+		filepath.Join(projectDir, cacheDir, cacheFilename),
+		filepath.Join(projectDir, legacyCacheDir, cacheFilename),
 	}
-	if err != nil {
-		return nil, fmt.Errorf("reading cache: %w", err)
+	var data []byte
+	var err error
+	for _, p := range candidates {
+		data, err = os.ReadFile(p)
+		if err == nil {
+			break
+		}
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("reading cache: %w", err)
+		}
+	}
+	if data == nil {
+		return nil, nil
 	}
 
 	var a Analysis

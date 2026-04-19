@@ -27,8 +27,8 @@ var uninstallCmd = &cobra.Command{
 	Long: `Remove every trace of ccb:
 
   1. Files ccb generated in the current project (from the manifest)
-  2. The per-project cache (.ccbootstrap/ inside the project)
-  3. The global config (~/.ccbootstrap/)
+  2. The per-project cache (.ccb/ inside the project, + legacy .ccbootstrap/)
+  3. The global config (~/.ccb/, + legacy ~/.ccbootstrap/)
   4. The ccb binary itself (the currently-running executable)
 
 Every destructive step asks for confirmation unless --yes is passed.`,
@@ -39,7 +39,7 @@ func init() {
 	rootCmd.AddCommand(uninstallCmd)
 	uninstallCmd.Flags().BoolVarP(&uninstallFlags.yes, "yes", "y", false, "Skip all confirmations")
 	uninstallCmd.Flags().BoolVar(&uninstallFlags.keepBinary, "keep-binary", false, "Do not delete the ccb binary")
-	uninstallCmd.Flags().BoolVar(&uninstallFlags.keepGlobal, "keep-global", false, "Do not delete ~/.ccbootstrap/")
+	uninstallCmd.Flags().BoolVar(&uninstallFlags.keepGlobal, "keep-global", false, "Do not delete ~/.ccb/ (or legacy ~/.ccbootstrap/)")
 	uninstallCmd.Flags().BoolVar(&uninstallFlags.keepProject, "keep-project", false, "Do not touch files in the current project")
 }
 
@@ -51,11 +51,13 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 	fmt.Println("This will remove:")
 	if !uninstallFlags.keepProject {
 		fmt.Printf("  %s  files ccb generated in %s (from manifest)\n", tui.Bold("•"), tui.Cyan(wd))
-		fmt.Printf("  %s  %s/.ccbootstrap/ (per-project cache)\n", tui.Bold("•"), tui.Cyan(wd))
+		fmt.Printf("  %s  %s/.ccb/ (per-project cache, + legacy .ccbootstrap/)\n", tui.Bold("•"), tui.Cyan(wd))
 	}
 	if !uninstallFlags.keepGlobal {
 		home, _ := os.UserHomeDir()
-		fmt.Printf("  %s  %s (global config)\n", tui.Bold("•"), tui.Cyan(filepath.Join(home, ".ccbootstrap")))
+		fmt.Printf("  %s  %s and %s (global config)\n", tui.Bold("•"),
+			tui.Cyan(filepath.Join(home, ".ccb")),
+			tui.Cyan(filepath.Join(home, ".ccbootstrap")))
 	}
 	if !uninstallFlags.keepBinary {
 		exe, _ := os.Executable()
@@ -77,10 +79,15 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 
 	// ── Step 2: global config ────────────────────────────────────────────────
 	if !uninstallFlags.keepGlobal {
-		if err := os.RemoveAll(config.ConfigDir); err != nil {
-			tui.Warn(fmt.Sprintf("Could not remove %s: %s", config.ConfigDir, err.Error()))
-		} else {
-			tui.Success(fmt.Sprintf("Removed global config: %s", config.ConfigDir))
+		for _, dir := range []string{config.ConfigDir, config.LegacyConfigDir} {
+			if _, err := os.Stat(dir); err != nil {
+				continue
+			}
+			if err := os.RemoveAll(dir); err != nil {
+				tui.Warn(fmt.Sprintf("Could not remove %s: %s", dir, err.Error()))
+				continue
+			}
+			tui.Success(fmt.Sprintf("Removed global config: %s", dir))
 		}
 	}
 
@@ -130,9 +137,14 @@ func cleanProject(projectDir string) error {
 		_ = os.Remove(full) // fails if non-empty, which is desired
 	}
 
-	// Per-project cache
-	_ = os.RemoveAll(filepath.Join(projectDir, ".ccbootstrap"))
-	tui.Success(fmt.Sprintf("Removed %s/.ccbootstrap/", projectDir))
+	// Per-project cache (new .ccb/ and legacy .ccbootstrap/)
+	for _, cache := range []string{".ccb", ".ccbootstrap"} {
+		full := filepath.Join(projectDir, cache)
+		if _, err := os.Stat(full); err == nil {
+			_ = os.RemoveAll(full)
+			tui.Success(fmt.Sprintf("Removed %s/", cache))
+		}
+	}
 
 	if m.BackupFrom != "" {
 		fmt.Println()
@@ -149,6 +161,7 @@ func cleanProject(projectDir string) error {
 func fallbackCleanProject(projectDir string) error {
 	targets := []string{
 		".claude",
+		".ccb",
 		".ccbootstrap",
 		"CLAUDE.md",
 		"docs/architecture.md",

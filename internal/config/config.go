@@ -9,7 +9,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var ConfigDir = filepath.Join(os.Getenv("HOME"), ".ccbootstrap")
+var ConfigDir = filepath.Join(os.Getenv("HOME"), ".ccb")
+var LegacyConfigDir = filepath.Join(os.Getenv("HOME"), ".ccbootstrap")
 var ConfigFile = filepath.Join(ConfigDir, "config.yaml")
 
 type AIConfig struct {
@@ -119,6 +120,14 @@ func Default() *Config {
 
 
 func EnsureDirs() error {
+	// One-shot migration: if the new ~/.ccb doesn't exist but the legacy
+	// ~/.ccbootstrap does, move it so existing users keep their config.
+	if _, errNew := os.Stat(ConfigDir); os.IsNotExist(errNew) {
+		if _, errOld := os.Stat(LegacyConfigDir); errOld == nil {
+			_ = os.Rename(LegacyConfigDir, ConfigDir)
+		}
+	}
+
 	dirs := []string{
 		ConfigDir,
 		filepath.Join(ConfigDir, "cache", "templates"),
@@ -139,6 +148,13 @@ func Load() (*Config, error) {
 	data, err := os.ReadFile(ConfigFile)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// Fallback: try the legacy location in case migration failed.
+			legacyFile := filepath.Join(LegacyConfigDir, "config.yaml")
+			if legacyData, legacyErr := os.ReadFile(legacyFile); legacyErr == nil {
+				if unmarshalErr := yaml.Unmarshal(legacyData, cfg); unmarshalErr == nil {
+					return cfg, nil
+				}
+			}
 			return cfg, nil
 		}
 		return cfg, err

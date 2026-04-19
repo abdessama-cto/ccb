@@ -52,6 +52,7 @@ func runAddAgent(cmd *cobra.Command, args []string) error {
 		APIKey:          cfg.AI.ActiveKey(),
 		OllamaURL:       cfg.AI.OllamaURL,
 		MaxContextChars: contextLimitForProvider(cfg.AI.Provider),
+		Language:        cfg.UI.Language,
 	}
 
 	if nameHint != "" {

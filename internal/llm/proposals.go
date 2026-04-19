@@ -52,7 +52,7 @@ type Proposals struct {
 // GenerateProposals asks the LLM to propose agents, rules, and skills,
 // using the project understanding, the fingerprint, and the wizard answers.
 func GenerateProposals(cfg Config, u *ProjectUnderstanding, fp *analyzer.ProjectFingerprint, answers []WizardAnswer) (*Proposals, error) {
-	prompt := buildProposalsPrompt(u, fp, answers)
+	prompt := buildProposalsPrompt(u, fp, answers) + "\n\n" + LanguageDirective(cfg)
 	raw, err := CallLLM(cfg, prompt)
 	if err != nil {
 		return nil, err

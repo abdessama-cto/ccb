@@ -29,7 +29,7 @@ type WizardAnswer struct {
 // specific to the project being bootstrapped, based on the AI understanding
 // and the static fingerprint.
 func GenerateWizardQuestions(cfg Config, u *ProjectUnderstanding, fp *analyzer.ProjectFingerprint) ([]WizardQuestion, error) {
-	prompt := buildWizardPrompt(u, fp)
+	prompt := buildWizardPrompt(u, fp) + "\n\n" + LanguageDirective(cfg)
 	raw, err := CallLLM(cfg, prompt)
 	if err != nil {
 		return nil, err

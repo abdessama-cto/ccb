@@ -32,7 +32,7 @@ func GenerateFiles(
 	rules []RuleProposal,
 	skills []SkillProposal,
 ) (*GenerationResult, error) {
-	prompt := buildGenerationPrompt(u, fp, answers, agents, rules, skills)
+	prompt := buildGenerationPrompt(u, fp, answers, agents, rules, skills) + "\n\n" + LanguageDirective(cfg)
 	raw, err := CallLLM(cfg, prompt)
 	if err != nil {
 		return nil, err
