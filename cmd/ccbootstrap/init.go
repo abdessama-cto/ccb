@@ -129,17 +129,31 @@ func runInit(cmd *cobra.Command, args []string) error {
 	var understanding *llm.ProjectUnderstanding
 	cfg, _ := config.Load()
 	if cfg.AI.IsConfigured() {
-		tui.Info(fmt.Sprintf("Reading key files for AI understanding (%s / %s)...",
+		tui.Info(fmt.Sprintf("Reading full codebase for AI understanding (%s / %s)...",
 			cfg.AI.Provider, cfg.AI.ActiveModel()))
 		semCtx := analyzer.ExtractSemanticContext(destDir)
-		tui.Info(fmt.Sprintf("  %d files extracted (~%dk tokens)...",
+		tui.Info(fmt.Sprintf("  %d files · ~%dk tokens extracted",
 			len(semCtx.Files), semCtx.TokenEst/1000))
-		prompt := analyzer.BuildAIPrompt(semCtx, fp)
+
+		// Per-provider context limit: Gemini supports 1M tokens, others less
+		maxChars := 0 // no limit by default
+		switch cfg.AI.Provider {
+		case "openai":
+			maxChars = 300_000  // ~75k tokens (safe for gpt-4o)
+		case "ollama":
+			maxChars = 100_000  // ~25k tokens (safe for llama3.2 128k)
+		// gemini: 0 = no limit (~4M chars fits in 1M token window)
+		}
+
+		prompt := analyzer.BuildAIPromptLimited(semCtx, fp, maxChars)
+		tui.Info(fmt.Sprintf("  Sending %dk chars to %s...", len(prompt)/1000, cfg.AI.ActiveModel()))
+
 		understanding, err = llm.UnderstandProject(llm.Config{
-			Provider:  llm.Provider(cfg.AI.Provider),
-			Model:     cfg.AI.ActiveModel(),
-			APIKey:    cfg.AI.ActiveKey(),
-			OllamaURL: cfg.AI.OllamaURL,
+			Provider:        llm.Provider(cfg.AI.Provider),
+			Model:           cfg.AI.ActiveModel(),
+			APIKey:          cfg.AI.ActiveKey(),
+			OllamaURL:       cfg.AI.OllamaURL,
+			MaxContextChars: maxChars,
 		}, prompt)
 		if err != nil {
 			tui.Warn(fmt.Sprintf("AI understanding failed: %s — continuing with static analysis", err.Error()))

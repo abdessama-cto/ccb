@@ -38,17 +38,18 @@ const (
 
 // Config is the minimal config needed to call an LLM
 type Config struct {
-	Provider  Provider
-	Model     string
-	APIKey    string   // not needed for Ollama
-	OllamaURL string   // only for Ollama (default: http://localhost:11434)
+	Provider       Provider
+	Model          string
+	APIKey         string   // not needed for Ollama
+	OllamaURL      string   // only for Ollama
+	MaxContextChars int     // 0 = no limit. Set per provider (Gemini 1M = ~4M chars)
 }
 
 // UnderstandProject dispatches to the correct provider
 func UnderstandProject(cfg Config, prompt string) (*ProjectUnderstanding, error) {
-	// Truncate to avoid context limits
-	if len(prompt) > 80000 {
-		prompt = prompt[:80000] + "\n\n[ content truncated ]"
+	// Truncate only if MaxContextChars is set
+	if cfg.MaxContextChars > 0 && len(prompt) > cfg.MaxContextChars {
+		prompt = prompt[:cfg.MaxContextChars] + "\n\n[ content truncated to fit context limit ]"
 	}
 
 	var raw string
@@ -242,17 +243,36 @@ func httpDo(req *http.Request) ([]byte, error) {
 
 func parseJSON(raw string) (*ProjectUnderstanding, error) {
 	raw = strings.TrimSpace(raw)
-	raw = strings.TrimPrefix(raw, "```json")
-	raw = strings.TrimPrefix(raw, "```")
-	raw = strings.TrimSuffix(raw, "```")
+
+	// Strip markdown code fences (```json ... ``` or ``` ... ```)
+	if idx := strings.Index(raw, "```json"); idx != -1 {
+		raw = raw[idx+7:]
+		if end := strings.LastIndex(raw, "```"); end != -1 {
+			raw = raw[:end]
+		}
+	} else if idx := strings.Index(raw, "```"); idx != -1 {
+		raw = raw[idx+3:]
+		if end := strings.LastIndex(raw, "```"); end != -1 {
+			raw = raw[:end]
+		}
+	}
 	raw = strings.TrimSpace(raw)
+
+	// Find the first '{' in case there's any preamble text
+	if start := strings.Index(raw, "{"); start > 0 {
+		raw = raw[start:]
+	}
+	// Find the last '}' in case there's trailing text
+	if end := strings.LastIndex(raw, "}"); end != -1 && end < len(raw)-1 {
+		raw = raw[:end+1]
+	}
 
 	var u ProjectUnderstanding
 	if err := json.Unmarshal([]byte(raw), &u); err != nil {
-		// Fallback: return raw as purpose text
+		// Last resort fallback: return raw as purpose text
 		return &ProjectUnderstanding{
-			Purpose:         raw[:min(300, len(raw))],
-			WhatClaudeKnows: raw[:min(600, len(raw))],
+			Purpose:         "[Parse error — raw response: " + raw[:min(200, len(raw))] + "]",
+			WhatClaudeKnows: raw[:min(500, len(raw))],
 		}, nil
 	}
 	return &u, nil
