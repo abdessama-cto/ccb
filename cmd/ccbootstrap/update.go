@@ -11,17 +11,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var selfUpdateCmd = &cobra.Command{
-	Use:   "self-update",
+var updateCmd = &cobra.Command{
+	Use:   "update",
 	Short: "Update ccb to the latest version",
-	RunE:  runSelfUpdate,
+	RunE:  runUpdate,
 }
 
 func init() {
-	rootCmd.AddCommand(selfUpdateCmd)
+	rootCmd.AddCommand(updateCmd)
 }
 
-func runSelfUpdate(cmd *cobra.Command, args []string) error {
+func runUpdate(cmd *cobra.Command, args []string) error {
 	tui.Info("Checking for updates...")
 
 	// Determine binary arch suffix
@@ -63,19 +63,31 @@ func runSelfUpdate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("could not determine current binary path: %w", err)
 	}
 
-	binaryURL := fmt.Sprintf(
-		"https://github.com/abdessama-cto/ccb/releases/download/%s/ccb-%s",
-		latestVersion, arch,
+	baseURL := fmt.Sprintf(
+		"https://github.com/abdessama-cto/ccb/releases/download/%s",
+		latestVersion,
 	)
+	candidates := []string{
+		fmt.Sprintf("%s/ccb-%s", baseURL, arch),
+		fmt.Sprintf("%s/ccbootstrap-%s", baseURL, arch),
+	}
 	tmpPath := exe + ".new"
 
 	tui.Info(fmt.Sprintf("Downloading %s...", latestVersion))
-	dlCmd := exec.Command("curl", "-fsSL", "-o", tmpPath, binaryURL)
-	dlCmd.Stdout = os.Stdout
-	dlCmd.Stderr = os.Stderr
-	if err := dlCmd.Run(); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("download failed: %w", err)
+	var downloaded bool
+	var lastErr error
+	for _, url := range candidates {
+		dlCmd := exec.Command("curl", "-fsSL", "-o", tmpPath, url)
+		if err := dlCmd.Run(); err != nil {
+			lastErr = err
+			_ = os.Remove(tmpPath)
+			continue
+		}
+		downloaded = true
+		break
+	}
+	if !downloaded {
+		return fmt.Errorf("download failed (tried %d URLs): %w", len(candidates), lastErr)
 	}
 
 	if err := os.Chmod(tmpPath, 0755); err != nil {
