@@ -395,6 +395,12 @@ func (m checkModel) View() string {
 		}
 	}
 
+	detailWidth := m.width - 14
+	if detailWidth < 30 {
+		detailWidth = 30
+	}
+	indent := "        " // 8 spaces — aligns under label
+
 	for pos := 0; pos < len(vis) && pos < mainMaxVis; pos++ {
 		i := vis[pos]
 		it := m.items[i]
@@ -404,15 +410,16 @@ func (m checkModel) View() string {
 		if !it.Selected {
 			box = styleUncheck.Render("☐")
 		}
-		label := styleLabel.Render(fmt.Sprintf("%-30s", it.Label))
-		detail := styleDetail.Render(truncate(it.Detail, 40))
+		label := styleLabel.Render(it.Label)
+		detail := styleDetail.Width(detailWidth).Render(it.Detail)
 
-		row := fmt.Sprintf("    %s  %s  %s", box, label, detail)
+		var row string
 		if isCursor {
 			arrow := styleCursor.Render("▶")
-			row = fmt.Sprintf("  %s %s  %s  %s", arrow, box, label, detail)
+			row = fmt.Sprintf("  %s %s  %s\n%s%s", arrow, box, label, indent, detail)
 			sb.WriteString(styleRowActive.Render(row))
 		} else {
+			row = fmt.Sprintf("    %s  %s\n%s%s", box, label, indent, detail)
 			sb.WriteString(row)
 		}
 		sb.WriteString("\n")
@@ -460,26 +467,27 @@ func (m checkModel) View() string {
 			diskStart = m.offset
 		}
 
+		diskIndent := "        "
 		for pos := diskStart; pos < diskEnd; pos++ {
 			ds := m.diskResults[pos]
 			isCursor := m.focus == focusSearch && pos == m.cursor
 
-			// Mark if already in list or selected
 			inList := m.alreadyInList(ds.FolderName)
 			box := styleUncheck.Render("☐")
 			if inList {
 				box = styleChecked.Render("☑")
 			}
 
-			name := styleNewSkill.Render(fmt.Sprintf("%-30s", ds.FolderName))
-			desc := styleDetail.Render(truncate(ds.Description, 40))
+			name := styleNewSkill.Render(ds.FolderName)
+			desc := styleDetail.Width(detailWidth).Render(ds.Description)
 
-			row := fmt.Sprintf("    %s  %s  %s", box, name, desc)
+			var row string
 			if isCursor {
 				arrow := styleCursor.Render("▶")
-				row = fmt.Sprintf("  %s %s  %s  %s", arrow, box, name, desc)
+				row = fmt.Sprintf("  %s %s  %s\n%s%s", arrow, box, name, diskIndent, desc)
 				sb.WriteString(styleRowActive.Render(row))
 			} else {
+				row = fmt.Sprintf("    %s  %s\n%s%s", box, name, diskIndent, desc)
 				sb.WriteString(row)
 			}
 			sb.WriteString("\n")
