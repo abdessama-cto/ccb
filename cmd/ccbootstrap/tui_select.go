@@ -7,68 +7,89 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/abdessama-cto/ccb/internal/skills"
 )
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 var (
-	styleDim     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	styleTitle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
-	styleSub     = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	styleLabel   = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
-	styleDetail  = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	styleCursor  = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
-	styleChecked = lipgloss.NewStyle().Foreground(lipgloss.Color("120"))
-	styleUncheck = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	styleCount   = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
-	styleHint    = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
-
-	styleBorder = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62")).
-		Padding(0, 1)
+	styleDim       = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	styleTitle2    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	styleSub       = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	styleLabel     = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	styleDetail    = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	styleCursor    = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
+	styleChecked   = lipgloss.NewStyle().Foreground(lipgloss.Color("120"))
+	styleUncheck   = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	styleCount     = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
+	styleHint      = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	styleSepLine   = lipgloss.NewStyle().Foreground(lipgloss.Color("62"))
+	styleNewSkill  = lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Bold(true)
+	stylePreview   = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("251")).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("62")).
+			Padding(0, 1).
+			MarginTop(1)
 
 	styleSearchBox = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("212")).
-		Padding(0, 1)
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("212")).
+			Padding(0, 1)
 
-	styleTitle2 = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("212")).
-		MarginBottom(0)
+	styleRowActive = lipgloss.NewStyle().Background(lipgloss.Color("235"))
 )
 
 // ─── CheckItem ────────────────────────────────────────────────────────────────
 
-// CheckItem represents a selectable item in the interactive list
+// CheckItem represents a selectable item in the interactive checkbox list.
 type CheckItem struct {
 	Label    string
 	Detail   string
 	Selected bool
 }
 
+// ─── Focus area ───────────────────────────────────────────────────────────────
+
+type focusArea int
+
+const (
+	focusMain   focusArea = iota // navigating the main (AI proposed) list
+	focusSearch                  // navigating search results from disk
+)
+
 // ─── Bubbletea Model ──────────────────────────────────────────────────────────
 
 type checkModel struct {
 	title      string
 	subtitle   string
-	items      []CheckItem
-	cursor     int
-	offset     int   // scroll offset
-	maxVisible int   // rows visible at once
+	items      []CheckItem  // AI-proposed items
+	cursor     int          // cursor in current focus area
+	offset     int          // scroll offset for current focus
+	maxVisible int
 	searchable bool
 	searching  bool
 	search     textinput.Model
-	confirmed  bool
-	width      int
+	focus      focusArea
+
+	// Disk skill index (loaded once when / first pressed)
+	diskLoaded  bool
+	diskIndex   []skills.DiskSkill // all skills from disk
+	diskResults []skills.DiskSkill // filtered results from disk
+
+	// Preview pane: shows description of focused disk skill
+	previewText string
+
+	confirmed bool
+	width     int
 }
 
 func newCheckModel(title, subtitle string, items []CheckItem, searchable bool) checkModel {
 	ti := textinput.New()
 	ti.Placeholder = "type to filter…"
-	ti.CharLimit = 50
-	ti.Width = 40
+	ti.CharLimit = 60
+	ti.Width = 42
 	ti.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
 	ti.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
 
@@ -78,15 +99,16 @@ func newCheckModel(title, subtitle string, items []CheckItem, searchable bool) c
 		items:      items,
 		cursor:     0,
 		offset:     0,
-		maxVisible: 12,
+		maxVisible: 10,
 		searchable: searchable,
 		search:     ti,
 		width:      80,
+		focus:      focusMain,
 	}
 }
 
-// visible returns indices of items that match current search
-func (m checkModel) visible() []int {
+// visibleMain returns indices into m.items that match the current query
+func (m checkModel) visibleMain() []int {
 	q := strings.ToLower(m.search.Value())
 	var out []int
 	for i, it := range m.items {
@@ -98,6 +120,17 @@ func (m checkModel) visible() []int {
 	return out
 }
 
+// alreadyInList returns true if a disk skill name is already in items
+func (m checkModel) alreadyInList(folderName string) bool {
+	for _, it := range m.items {
+		if strings.EqualFold(it.Label, folderName) ||
+			strings.EqualFold(strings.ReplaceAll(it.Label, " ", "-"), folderName) {
+			return true
+		}
+	}
+	return false
+}
+
 func (m checkModel) Init() tea.Cmd { return nil }
 
 func (m checkModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -105,40 +138,80 @@ func (m checkModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
-		rows := msg.Height - 10
+		rows := msg.Height - 14
 		if rows < 4 {
 			rows = 4
 		}
-		if rows > 24 {
-			rows = 24
+		if rows > 18 {
+			rows = 18
 		}
 		m.maxVisible = rows
 
 	case tea.KeyMsg:
+		// ── Search text input handling ──────────────────────────────────────
 		if m.searching {
 			switch msg.String() {
 			case "esc":
 				m.searching = false
 				m.search.SetValue("")
 				m.search.Blur()
+				m.diskResults = nil
+				m.previewText = ""
+				m.focus = focusMain
 				m.cursor = 0
 				m.offset = 0
 			case "enter":
 				m.searching = false
 				m.search.Blur()
+				if len(m.diskResults) > 0 {
+					m.focus = focusSearch
+					m.cursor = 0
+					m.offset = 0
+					m.updatePreview()
+				}
+			case "tab":
+				// switch between main list and search results
+				if m.focus == focusMain {
+					if len(m.diskResults) > 0 {
+						m.focus = focusSearch
+						m.cursor = 0
+					}
+				} else {
+					m.focus = focusMain
+					m.cursor = 0
+				}
 			default:
 				var cmd tea.Cmd
 				m.search, cmd = m.search.Update(msg)
+				// Re-filter disk results live
+				q := m.search.Value()
+				if q == "" {
+					m.diskResults = nil
+					m.previewText = ""
+				} else {
+					if !m.diskLoaded {
+						m.diskIndex = skills.ScanDiskSkills("")
+						m.diskLoaded = true
+					}
+					// Filter out skills already in proposals
+					all := skills.Search(m.diskIndex, q)
+					m.diskResults = nil
+					for _, ds := range all {
+						m.diskResults = append(m.diskResults, ds)
+					}
+				}
 				m.cursor = 0
 				m.offset = 0
+				m.updatePreview()
 				return m, cmd
 			}
+			m.updatePreview()
 			return m, nil
 		}
 
-		vis := m.visible()
+		// ── Normal navigation ───────────────────────────────────────────────
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case "ctrl+c":
 			m.confirmed = true
 			return m, tea.Quit
 
@@ -146,64 +219,138 @@ func (m checkModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.confirmed = true
 			return m, tea.Quit
 
+		case "esc":
+			if m.focus == focusSearch || len(m.diskResults) > 0 {
+				m.focus = focusMain
+				m.diskResults = nil
+				m.search.SetValue("")
+				m.previewText = ""
+				m.cursor = 0
+			} else {
+				m.confirmed = true
+				return m, tea.Quit
+			}
+
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
 				if m.cursor < m.offset {
 					m.offset = m.cursor
 				}
+				m.updatePreview()
 			}
 
 		case "down", "j":
-			if m.cursor < len(vis)-1 {
+			limit := m.currentLimit()
+			if m.cursor < limit-1 {
 				m.cursor++
 				if m.cursor >= m.offset+m.maxVisible {
 					m.offset = m.cursor - m.maxVisible + 1
 				}
+				m.updatePreview()
+			}
+
+		case "tab":
+			// switch focus between lists
+			if m.searchable && len(m.diskResults) > 0 {
+				if m.focus == focusMain {
+					m.focus = focusSearch
+				} else {
+					m.focus = focusMain
+				}
+				m.cursor = 0
+				m.offset = 0
+				m.updatePreview()
 			}
 
 		case " ":
-			if m.cursor < len(vis) {
-				i := vis[m.cursor]
-				m.items[i].Selected = !m.items[i].Selected
+			if m.focus == focusMain {
+				vis := m.visibleMain()
+				if m.cursor < len(vis) {
+					i := vis[m.cursor]
+					m.items[i].Selected = !m.items[i].Selected
+				}
+			} else if m.focus == focusSearch {
+				// Add disk skill to the list and select it
+				if m.cursor < len(m.diskResults) {
+					ds := m.diskResults[m.cursor]
+					if !m.alreadyInList(ds.FolderName) {
+						m.items = append(m.items, CheckItem{
+							Label:    ds.FolderName,
+							Detail:   ds.Description,
+							Selected: true,
+						})
+					} else {
+						// Toggle existing
+						for i, it := range m.items {
+							if strings.EqualFold(it.Label, ds.FolderName) {
+								m.items[i].Selected = !m.items[i].Selected
+								break
+							}
+						}
+					}
+				}
 			}
 
 		case "a":
-			for i := range m.items {
-				m.items[i].Selected = true
+			if m.focus == focusMain {
+				for i := range m.items {
+					m.items[i].Selected = true
+				}
 			}
 
 		case "n":
-			for i := range m.items {
-				m.items[i].Selected = false
+			if m.focus == focusMain {
+				for i := range m.items {
+					m.items[i].Selected = false
+				}
 			}
 
 		case "/":
 			if m.searchable {
 				m.searching = true
 				m.search.Focus()
+				if !m.diskLoaded {
+					m.diskIndex = skills.ScanDiskSkills("")
+					m.diskLoaded = true
+				}
 			}
 		}
 	}
 	return m, nil
 }
 
+func (m checkModel) currentLimit() int {
+	if m.focus == focusSearch {
+		return len(m.diskResults)
+	}
+	return len(m.visibleMain())
+}
+
+func (m *checkModel) updatePreview() {
+	if m.focus == focusSearch && m.cursor < len(m.diskResults) {
+		ds := m.diskResults[m.cursor]
+		m.previewText = ds.Description
+		if m.previewText == "" {
+			m.previewText = ds.Preview
+		}
+	} else {
+		m.previewText = ""
+	}
+}
+
+// ─── View ─────────────────────────────────────────────────────────────────────
+
 func (m checkModel) View() string {
 	if m.confirmed {
 		return ""
 	}
 
-	vis := m.visible()
-	end := m.offset + m.maxVisible
-	if end > len(vis) {
-		end = len(vis)
-	}
-
 	var sb strings.Builder
-
-	// ── Title ──────────────────────────────────────────────────────────────
 	sb.WriteString("\n")
-	sb.WriteString(styleTitle2.Render(m.title))
+
+	// Title
+	sb.WriteString(styleTitle2.Render("  " + m.title))
 	sb.WriteString("\n")
 	if m.subtitle != "" {
 		sb.WriteString(styleSub.Render("  " + m.subtitle))
@@ -211,77 +358,155 @@ func (m checkModel) View() string {
 	}
 	sb.WriteString("\n")
 
-	// ── Keybind hint ───────────────────────────────────────────────────────
-	hints := []string{"↑/↓ navigate", "SPACE toggle", "ENTER confirm", "a/n all/none"}
-	if m.searchable {
-		hints = append(hints, "/ search")
+	// Keybind bar
+	var hints []string
+	if m.focus == focusSearch {
+		hints = []string{"↑/↓ navigate results", "SPACE add", "TAB switch list", "ENTER confirm", "ESC back"}
+	} else {
+		hints = []string{"↑/↓ navigate", "SPACE toggle", "ENTER confirm", "a/n all/none"}
+		if m.searchable {
+			hints = append(hints, "/ search disk")
+		}
 	}
 	sb.WriteString(styleHint.Render("  " + strings.Join(hints, "  ·  ")))
 	sb.WriteString("\n\n")
 
-	// ── Items ──────────────────────────────────────────────────────────────
-	if len(vis) == 0 {
-		sb.WriteString(styleDim.Render("  No results for: " + m.search.Value()))
+	// ── Main (AI proposed) list ────────────────────────────────────────────
+	vis := m.visibleMain()
+	end := m.offset + m.maxVisible
+	if end > len(vis) {
+		end = len(vis)
+	}
+
+	if len(vis) == 0 && m.search.Value() != "" && m.focus == focusMain {
+		sb.WriteString(styleDim.Render("  (no AI proposals match filter)"))
 		sb.WriteString("\n")
 	}
 
-	for pos := m.offset; pos < end; pos++ {
+	mainOffset := 0
+	mainEnd := end
+	mainMaxVis := m.maxVisible
+
+	// When disk results are shown, shrink main list
+	if len(m.diskResults) > 0 {
+		mainMaxVis = 5
+		if mainEnd > mainOffset+mainMaxVis {
+			mainEnd = mainOffset + mainMaxVis
+		}
+	}
+
+	for pos := 0; pos < len(vis) && pos < mainMaxVis; pos++ {
 		i := vis[pos]
 		it := m.items[i]
-		isCursor := pos == m.cursor
+		isCursor := m.focus == focusMain && pos == m.cursor
 
-		// Checkbox
-		var box string
-		if it.Selected {
-			box = styleChecked.Render("☑")
-		} else {
+		box := styleChecked.Render("☑")
+		if !it.Selected {
 			box = styleUncheck.Render("☐")
 		}
-
-		// Label + detail
 		label := styleLabel.Render(fmt.Sprintf("%-30s", it.Label))
-		detail := styleDetail.Render(it.Detail)
+		detail := styleDetail.Render(truncate(it.Detail, 40))
 
+		row := fmt.Sprintf("    %s  %s  %s", box, label, detail)
 		if isCursor {
 			arrow := styleCursor.Render("▶")
-			row := fmt.Sprintf("  %s %s  %s  %s", arrow, box, label, detail)
-			sb.WriteString(lipgloss.NewStyle().
-				Background(lipgloss.Color("235")).
-				Render(row))
+			row = fmt.Sprintf("  %s %s  %s  %s", arrow, box, label, detail)
+			sb.WriteString(styleRowActive.Render(row))
 		} else {
-			row := fmt.Sprintf("    %s  %s  %s", box, label, detail)
 			sb.WriteString(row)
 		}
 		sb.WriteString("\n")
 	}
-
-	// ── Scroll indicator ───────────────────────────────────────────────────
-	if len(vis) > m.maxVisible {
-		sb.WriteString(styleDim.Render(fmt.Sprintf(
-			"\n  %d–%d of %d  (scroll with ↑/↓)\n", m.offset+1, end, len(vis))))
+	if len(vis) > mainMaxVis {
+		sb.WriteString(styleDim.Render(fmt.Sprintf("  … %d more in list\n", len(vis)-mainMaxVis)))
 	}
 
 	// ── Search bar ─────────────────────────────────────────────────────────
+	sb.WriteString("\n")
 	if m.searching {
-		sb.WriteString("\n")
 		sb.WriteString(styleSearchBox.Render("  / " + m.search.View()))
 		sb.WriteString("\n")
-	} else if m.searchable && !m.searching {
-		sb.WriteString(styleHint.Render("\n  Press  /  to search"))
+	} else if m.searchable {
+		q := m.search.Value()
+		if q != "" {
+			sb.WriteString(styleDim.Render(fmt.Sprintf("  Filter: %s  (TAB to switch focus · ESC to clear)", q)))
+		} else {
+			sb.WriteString(styleHint.Render("  Press  /  to search 100+ skills from disk"))
+		}
 		sb.WriteString("\n")
 	}
 
-	// ── Footer: count ──────────────────────────────────────────────────────
+	// ── Disk search results ─────────────────────────────────────────────────
+	if len(m.diskResults) > 0 {
+		sep := styleSepLine.Render(strings.Repeat("─", 60))
+		sb.WriteString(sep + "\n")
+		label := "  🔍 Skills from disk"
+		if m.focus == focusSearch {
+			label = styleTitle2.Render("  🔍 Skills from disk") + styleDim.Render(" ← focus here")
+		} else {
+			label = styleDim.Render(label) + styleHint.Render("  (TAB to navigate)")
+		}
+		sb.WriteString(label + "\n\n")
+
+		diskEnd := m.offset + m.maxVisible
+		if m.focus != focusSearch {
+			diskEnd = 5 // preview only
+		}
+		if diskEnd > len(m.diskResults) {
+			diskEnd = len(m.diskResults)
+		}
+		diskStart := 0
+		if m.focus == focusSearch {
+			diskStart = m.offset
+		}
+
+		for pos := diskStart; pos < diskEnd; pos++ {
+			ds := m.diskResults[pos]
+			isCursor := m.focus == focusSearch && pos == m.cursor
+
+			// Mark if already in list or selected
+			inList := m.alreadyInList(ds.FolderName)
+			box := styleUncheck.Render("☐")
+			if inList {
+				box = styleChecked.Render("☑")
+			}
+
+			name := styleNewSkill.Render(fmt.Sprintf("%-30s", ds.FolderName))
+			desc := styleDetail.Render(truncate(ds.Description, 40))
+
+			row := fmt.Sprintf("    %s  %s  %s", box, name, desc)
+			if isCursor {
+				arrow := styleCursor.Render("▶")
+				row = fmt.Sprintf("  %s %s  %s  %s", arrow, box, name, desc)
+				sb.WriteString(styleRowActive.Render(row))
+			} else {
+				sb.WriteString(row)
+			}
+			sb.WriteString("\n")
+		}
+
+		if m.focus == focusSearch && len(m.diskResults) > m.maxVisible {
+			sb.WriteString(styleDim.Render(fmt.Sprintf(
+				"\n  %d–%d of %d results\n", diskStart+1, diskEnd, len(m.diskResults))))
+		}
+
+		// Preview pane
+		if m.previewText != "" {
+			wrapped := tuiWordWrap(m.previewText, m.width-12)
+			sb.WriteString(stylePreview.Render("  " + wrapped))
+			sb.WriteString("\n")
+		}
+	}
+
+	// ── Footer ─────────────────────────────────────────────────────────────
 	selected := 0
 	for _, it := range m.items {
 		if it.Selected {
 			selected++
 		}
 	}
-	footer := fmt.Sprintf("\n  %s  %d / %d selected",
-		styleCount.Render("●"), selected, len(m.items))
-	sb.WriteString(footer)
-	sb.WriteString("\n")
+	sb.WriteString(styleCount.Render(fmt.Sprintf("\n  ● %d / %d selected\n",
+		selected, len(m.items))))
 
 	return sb.String()
 }
@@ -289,14 +514,13 @@ func (m checkModel) View() string {
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 // InteractiveCheckbox shows a Bubbletea-powered checkbox selector.
-// Returns items with Updated Selected fields.
+// When searchable=true, / searches real SKILL.md files from disk.
 func InteractiveCheckbox(title, subtitle string, items []CheckItem, searchable bool) []CheckItem {
 	m := newCheckModel(title, subtitle, items, searchable)
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	finalModel, err := p.Run()
 	if err != nil {
-		// Fallback if terminal not supported
 		return fallbackCheckbox(title, subtitle, items)
 	}
 
@@ -306,10 +530,40 @@ func InteractiveCheckbox(title, subtitle string, items []CheckItem, searchable b
 	return items
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// tuiWordWrap wraps text at maxWidth characters, for use in the TUI preview pane.
+func tuiWordWrap(text string, maxWidth int) string {
+	if maxWidth <= 0 || len(text) <= maxWidth {
+		return text
+	}
+	words := strings.Fields(text)
+	var lines []string
+	var current string
+	for _, w := range words {
+		if len(current)+len(w)+1 > maxWidth {
+			if current != "" {
+				lines = append(lines, current)
+			}
+			current = w
+		} else {
+			if current == "" {
+				current = w
+			} else {
+				current += " " + w
+			}
+		}
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	return strings.Join(lines, "\n  ")
+}
+
 // ─── Fallback (CI / pipes / non-TTY) ─────────────────────────────────────────
 
 func fallbackCheckbox(title, subtitle string, items []CheckItem) []CheckItem {
-	fmt.Printf("\n  %s\n", styleTitle.Render(title))
+	fmt.Printf("\n  %s\n", styleTitle2.Render(title))
 	if subtitle != "" {
 		fmt.Printf("  %s\n\n", styleSub.Render(subtitle))
 	}
@@ -318,13 +572,10 @@ func fallbackCheckbox(title, subtitle string, items []CheckItem) []CheckItem {
 		if !it.Selected {
 			check = styleUncheck.Render("[ ]")
 		}
-		fmt.Printf("  %s %2d. %-32s %s\n",
-			check, i+1,
-			styleLabel.Render(it.Label),
-			styleDetail.Render(it.Detail))
+		fmt.Printf("  %s %2d. %-32s %s\n", check, i+1,
+			styleLabel.Render(it.Label), styleDetail.Render(it.Detail))
 	}
 	fmt.Print("\n  Toggle (e.g. \"3 5\") or Enter: ")
-
 	var line string
 	fmt.Scanln(&line)
 	for _, tok := range strings.Fields(line) {
