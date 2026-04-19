@@ -8,59 +8,56 @@ import (
 	"strings"
 )
 
-// SemanticContext holds raw file contents extracted for AI understanding
+// SemanticContext holds raw file contents for AI analysis
 type SemanticContext struct {
-	Files    map[string]string // path → content
-	TokenEst int               // rough token estimate (~4 chars per token)
+	Files    map[string]string
+	TokenEst int
 }
 
-// ExtractSemanticContext reads ALL significant files in the repo for AI analysis.
-// It is designed to maximise context sent to the LLM (takes advantage of 1M+ context windows).
+// ExtractSemanticContext reads the project intelligently:
+// 1. Always reads structural/description files first
+// 2. Reads ALL source files, skipping ignored dirs and binary/generated files
+// 3. Orders by importance (routes, controllers, services before generic files)
 func ExtractSemanticContext(repoDir string) *SemanticContext {
 	ctx := &SemanticContext{Files: make(map[string]string)}
 
-	// 1. Always read description/config files first
-	for _, rel := range priorityFiles {
+	// ── Phase A: Structural files (always read, highest priority) ────────────
+	for _, rel := range structuralFiles {
 		full := filepath.Join(repoDir, rel)
 		if content := smartRead(full, rel); content != "" {
 			ctx.Files[rel] = content
 		}
 	}
 
-	// 2. Directory tree overview
+	// ── Directory tree (4 levels deep) ───────────────────────────────────────
 	ctx.Files["__dir_tree__"] = buildDirTree(repoDir, 4)
 
-	// 3. Read ALL source files recursively (skip ignored dirs & binary files)
+	// ── Phase B: All source files (smart-filtered) ───────────────────────────
 	_ = filepath.Walk(repoDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
+		if err != nil || info == nil {
 			return nil
 		}
-		name := info.Name()
 
-		// Skip ignored directories
 		if info.IsDir() {
-			if ignoredDirs[name] {
+			if shouldIgnoreDir(info.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
 		rel, _ := filepath.Rel(repoDir, path)
-
-		// Skip if already read
 		if _, already := ctx.Files[rel]; already {
 			return nil
 		}
 
-		// Only read source-like files
-		ext := strings.ToLower(filepath.Ext(name))
-		if !sourceExtensions[ext] {
+		ext := strings.ToLower(filepath.Ext(info.Name()))
+		if !isSourceFile(ext, info.Name()) {
 			return nil
 		}
 
-		// Skip very large files (>200KB) — probably generated
-		if info.Size() > 200_000 {
-			ctx.Files[rel] = fmt.Sprintf("[ file too large (%dKB) — skipped ]", info.Size()/1024)
+		// Skip files > 100KB (likely generated/large data)
+		if info.Size() > 100_000 {
+			ctx.Files[rel] = fmt.Sprintf("[ file skipped: too large (%dKB) ]", info.Size()/1024)
 			return nil
 		}
 
@@ -79,182 +76,229 @@ func ExtractSemanticContext(repoDir string) *SemanticContext {
 	return ctx
 }
 
-// BuildAIPrompt creates the prompt for project understanding.
-// maxChars = 0 means no limit (use for Gemini 1M+).
+// BuildAIPrompt builds prompt with no character limit (for Gemini 1M context)
 func BuildAIPrompt(ctx *SemanticContext, fp *ProjectFingerprint) string {
-	return buildPromptWithLimit(ctx, fp, 0)
+	return buildPrompt(ctx, fp, 0)
 }
 
-// BuildAIPromptLimited creates the prompt with a character limit.
+// BuildAIPromptLimited builds prompt with a character limit
 func BuildAIPromptLimited(ctx *SemanticContext, fp *ProjectFingerprint, maxChars int) string {
-	return buildPromptWithLimit(ctx, fp, maxChars)
+	return buildPrompt(ctx, fp, maxChars)
 }
 
-func buildPromptWithLimit(ctx *SemanticContext, fp *ProjectFingerprint, maxChars int) string {
+func buildPrompt(ctx *SemanticContext, fp *ProjectFingerprint, maxChars int) string {
 	var sb strings.Builder
 
-	sb.WriteString(`You are analyzing a software project codebase.
-Based on ALL the files provided, return a SINGLE valid JSON object (no markdown fences, no explanation outside the JSON):
+	sb.WriteString(`You are a senior software architect analyzing a codebase.
+Study all the files below carefully, then return a single JSON object.
+
+CRITICAL: Return ONLY the JSON — no markdown code fences, no text before or after, just the raw JSON.
 
 {
-  "project_name": "name of the project",
-  "purpose": "2-3 sentences: what this app does, for whom, and why",
-  "domain": "e.g. e-commerce, SaaS, portfolio, API backend, mobile app...",
-  "architecture": "clear description of the architecture pattern and how components interact",
-  "key_features": ["feature1", "feature2", "feature3", "..."],
-  "main_modules": ["module: what it does", "module: what it does", "..."],
-  "api_endpoints": ["METHOD /path — description", "..."],
-  "external_services": ["ServiceName: purpose", "..."],
-  "conventions": ["convention or coding pattern observed", "..."],
-  "tech_notes": "important technical details, gotchas, or patterns Claude should know when working on this",
-  "what_claude_should_know": "key context for an AI assistant working on this codebase day-to-day"
+  "project_name": "exact name of the project",
+  "purpose": "2-3 sentences: what this app does, who uses it, and the business value",
+  "domain": "e.g. e-commerce, SaaS platform, mobile backend, developer tool...",
+  "architecture": "concise description of the architecture (e.g. Next.js SSR + REST API + PostgreSQL via Prisma)",
+  "key_features": ["feature1", "feature2", "feature3"],
+  "main_modules": [
+    "module_name: what it does",
+    "module_name: what it does"
+  ],
+  "api_endpoints": [
+    "METHOD /path — what it does",
+    "METHOD /path — what it does"
+  ],
+  "external_services": [
+    "ServiceName: how it is used"
+  ],
+  "conventions": [
+    "naming or structural convention observed in the code"
+  ],
+  "tech_notes": "important patterns, gotchas, or architectural decisions Claude should know",
+  "what_claude_should_know": "essential context for an AI assistant working on this codebase daily"
 }
-
-IMPORTANT:
-- Return ONLY the JSON object. Do not wrap it in markdown code fences.
-- Be specific and concrete, not generic.
-- Infer business logic and purpose from the actual code, not just file names.
 
 `)
 
-	sb.WriteString(fmt.Sprintf("Detected stack: %s\n\n", fp.StackString()))
+	sb.WriteString(fmt.Sprintf("Stack detected: %s\nTotal files: %d\n\n", fp.StackString(), fp.Files))
 
-	// Write files in priority order
-	written := map[string]bool{}
-	charCount := len(sb.String())
-
-	// Priority: description → tree → routes/controllers → other source files
-	orderedKeys := orderedFileKeys(ctx.Files)
+	// Write files in importance order
+	orderedKeys := rankFiles(ctx.Files)
+	charCount := sb.Len()
 
 	for _, key := range orderedKeys {
 		content := ctx.Files[key]
 		chunk := fmt.Sprintf("=== %s ===\n%s\n\n", key, content)
 
 		if maxChars > 0 && charCount+len(chunk) > maxChars {
-			// Add a note and stop
-			sb.WriteString("[ ... additional files omitted due to context limit ... ]\n")
+			sb.WriteString(fmt.Sprintf("[ ... %d more files omitted (context limit) ]\n", len(orderedKeys)))
 			break
 		}
-
 		sb.WriteString(chunk)
-		written[key] = true
 		charCount += len(chunk)
 	}
 
 	return sb.String()
 }
 
-// orderedFileKeys returns file keys sorted by importance
-func orderedFileKeys(files map[string]string) []string {
-	priority := []string{
-		"README.md", "readme.md", "README.rst",
-		"package.json", "composer.json", "pyproject.toml", "go.mod", "Gemfile", "Cargo.toml",
-		"__dir_tree__",
+// rankFiles orders files by their importance signal
+func rankFiles(files map[string]string) []string {
+	type scored struct {
+		key   string
+		score int
 	}
 
-	result := make([]string, 0, len(files))
-	seen := map[string]bool{}
-
-	// Priority first
-	for _, k := range priority {
-		if _, ok := files[k]; ok {
-			result = append(result, k)
-			seen[k] = true
-		}
-	}
-
-	// Routes/controllers next (high signal)
-	remaining := []string{}
+	list := make([]scored, 0, len(files))
 	for k := range files {
-		if seen[k] {
-			continue
-		}
-		remaining = append(remaining, k)
+		list = append(list, scored{k, scoreFile(k)})
 	}
 
-	sort.Slice(remaining, func(i, j int) bool {
-		return fileImportance(remaining[i]) > fileImportance(remaining[j])
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].score > list[j].score
 	})
 
-	result = append(result, remaining...)
+	result := make([]string, len(list))
+	for i, s := range list {
+		result[i] = s.key
+	}
 	return result
 }
 
-// fileImportance scores a file path for ordering
-func fileImportance(path string) int {
+func scoreFile(path string) int {
 	lower := strings.ToLower(path)
-	score := 0
+	score := 100 - strings.Count(path, "/")*5 // prefer root-level files
 
-	highSignal := []string{
-		"route", "router", "controller", "handler", "api", "service",
-		"module", "main", "index", "app", "server", "config",
-		"model", "schema", "entity", "migration",
-		"middleware", "auth", "guard",
+	highValue := map[string]int{
+		"readme":      80, "package.json": 70, "composer.json": 70,
+		"go.mod": 70, "pyproject": 70,
+		"__dir_tree__": 65,
+		"route":        60, "routes": 60, "router": 60,
+		"controller": 55, "handler": 55,
+		"service":    50, "repository": 50,
+		"model":      48, "schema": 48, "entity": 48, "prisma": 48,
+		"api":        45, "graphql": 45,
+		"middleware": 40, "auth": 40, "guard": 40,
+		"config":     35, "constant": 35, "env": 35,
+		"main":       30, "index": 30, "app": 30, "server": 30,
+		"module":     25,
+		"migration":  20,
+		"test":       10, "spec": 10,
 	}
-	for _, kw := range highSignal {
-		if strings.Contains(lower, kw) {
-			score += 10
+
+	for keyword, boost := range highValue {
+		if strings.Contains(lower, keyword) {
+			score += boost
 		}
 	}
 
-	// Prefer shorter paths (closer to root = more structural)
-	score -= strings.Count(path, "/") * 2
+	// Penalise obvious noise
+	noise := []string{".min.", ".map", "package-lock", "yarn.lock", "pnpm-lock", ".d.ts", ".snap"}
+	for _, n := range noise {
+		if strings.Contains(lower, n) {
+			score -= 60
+		}
+	}
 
 	return score
 }
 
-// ─── Internal helpers ─────────────────────────────────────────────────────────
+// ─── Helper functions ─────────────────────────────────────────────────────────
 
-var ignoredDirs = map[string]bool{
-	"node_modules": true, "vendor": true, ".git": true,
-	"dist": true, "build": true, ".next": true, "out": true,
-	"__pycache__": true, ".mypy_cache": true,
-	"coverage": true, ".nyc_output": true,
-	"venv": true, ".venv": true, "env": true,
-	".idea": true, ".vscode": true,
-	"storage": true, "bootstrap/cache": true,
-	"public/build": true, "public/hot": true,
-	".turbo": true, ".cache": true,
-	"tmp": true, "temp": true, "logs": true,
+// shouldIgnoreDir returns true for directories that should be skipped
+func shouldIgnoreDir(name string) bool {
+	ignored := map[string]bool{
+		// Package managers
+		"node_modules": true, "vendor": true,
+		// Build outputs
+		"dist": true, "build": true, "out": true, ".next": true,
+		"public/build": true,
+		// Python
+		"__pycache__": true, ".mypy_cache": true, ".pytest_cache": true,
+		"venv": true, ".venv": true, "env": true,
+		// Cache/tools
+		".git": true, ".idea": true, ".vscode": true,
+		".turbo": true, ".cache": true, ".parcel-cache": true,
+		// Laravel specific
+		"storage": true, "bootstrap/cache": true,
+		// Misc
+		"tmp": true, "temp": true, "logs": true, "coverage": true,
+		".nyc_output": true, "storybook-static": true,
+	}
+	return ignored[name]
 }
 
-var sourceExtensions = map[string]bool{
-	// Web
-	".ts": true, ".tsx": true, ".js": true, ".jsx": true, ".vue": true, ".svelte": true,
-	".css": true, ".scss": true, ".less": true,
-	// Backend
-	".go": true, ".py": true, ".rb": true, ".rs": true, ".java": true, ".kt": true,
-	".php": true, ".cs": true, ".swift": true, ".dart": true,
-	// Config/Data
-	".json": true, ".yaml": true, ".yml": true, ".toml": true, ".env": true,
-	// Docs
-	".md": true, ".mdx": true, ".txt": true,
-	// Shell
-	".sh": true, ".bash": true, ".zsh": true,
-	// Templates
-	".html": true, ".blade.php": true, ".ejs": true, ".hbs": true, ".jinja2": true,
-	// DB
-	".sql": true, ".prisma": true, ".graphql": true, ".gql": true,
+// isSourceFile returns true for files worth reading
+func isSourceFile(ext, name string) bool {
+	// Skip lock files by name
+	lockFiles := map[string]bool{
+		"package-lock.json": true, "yarn.lock": true, "pnpm-lock.yaml": true,
+		"composer.lock": true, "Gemfile.lock": true, "Cargo.lock": true,
+		"poetry.lock": true, "go.sum": true,
+	}
+	if lockFiles[name] {
+		return false
+	}
+
+	// Skip minified/map files
+	if strings.Contains(name, ".min.") || strings.HasSuffix(name, ".map") {
+		return false
+	}
+
+	// Skip TypeScript declaration files
+	if strings.HasSuffix(name, ".d.ts") {
+		return false
+	}
+
+	source := map[string]bool{
+		// JS/TS ecosystem
+		".ts": true, ".tsx": true, ".js": true, ".jsx": true,
+		".vue": true, ".svelte": true, ".astro": true,
+		// Backend
+		".go": true, ".py": true, ".rb": true, ".rs": true,
+		".java": true, ".kt": true, ".php": true, ".cs": true,
+		".swift": true, ".dart": true, ".ex": true, ".exs": true,
+		// Config/schema
+		".json": true, ".yaml": true, ".yml": true, ".toml": true,
+		".prisma": true, ".graphql": true, ".gql": true,
+		// Docs
+		".md": true, ".mdx": true,
+		// Shell
+		".sh": true, ".bash": true,
+		// Templates
+		".html": true, ".ejs": true, ".hbs": true, ".blade": true,
+		// DB
+		".sql": true,
+		// Env
+		".env": true,
+	}
+	return source[ext]
 }
 
-// priorityFiles are always read first regardless of walking
-var priorityFiles = []string{
+// structuralFiles are always read regardless of the walk
+var structuralFiles = []string{
 	"README.md", "readme.md", "README.rst", "README.txt",
 	"package.json", "composer.json", "pyproject.toml",
-	"go.mod", "Gemfile", "Cargo.toml",
-	".env.example", ".env.sample",
-	"docker-compose.yml", "docker-compose.yaml",
-	"Dockerfile",
+	"go.mod", "Gemfile", "Cargo.toml", "pom.xml",
+	".env.example", ".env.sample", ".env.local.example",
+	"docker-compose.yml", "docker-compose.yaml", "Dockerfile",
+	"next.config.js", "next.config.ts", "next.config.mjs",
+	"nuxt.config.ts", "nuxt.config.js",
+	"vite.config.ts", "vite.config.js",
+	"tailwind.config.js", "tailwind.config.ts",
+	"tsconfig.json",
+	"app/Http/Kernel.php",
+	"config/app.php",
+	"manage.py",
 }
 
-// smartRead reads a file with smart filtering
+// smartRead reads a file with filtering
 func smartRead(path, relPath string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
 
-	// Skip binary files
+	// Binary check
 	sample := data
 	if len(sample) > 512 {
 		sample = sample[:512]
@@ -268,14 +312,14 @@ func smartRead(path, relPath string) string {
 	content := string(data)
 	lines := strings.Split(content, "\n")
 
-	// Skip minified files
-	for _, line := range lines[:min2(len(lines), 5)] {
+	// Minified file check
+	for _, line := range lines[:min2(len(lines), 3)] {
 		if len(line) > 2000 {
-			return "[ minified/generated file — skipped ]"
+			return "[ minified/generated — skipped ]"
 		}
 	}
 
-	// Special handling for config files
+	// Special processing for known structured files
 	if relPath == "package.json" {
 		return extractPackageJSONSummary(content)
 	}
@@ -283,13 +327,12 @@ func smartRead(path, relPath string) string {
 		return extractComposerJSONSummary(content)
 	}
 
-	// Truncate very large files: keep first 300 lines + last 50 lines
-	maxLines := 300
-	if len(lines) > maxLines+50 {
-		head := strings.Join(lines[:maxLines], "\n")
-		tail := strings.Join(lines[len(lines)-50:], "\n")
-		return fmt.Sprintf("%s\n\n[ ... %d lines truncated ... ]\n\n%s",
-			head, len(lines)-maxLines-50, tail)
+	// Truncate large files: keep head (250 lines) + tail (30 lines)
+	if len(lines) > 280 {
+		head := strings.Join(lines[:250], "\n")
+		tail := strings.Join(lines[len(lines)-30:], "\n")
+		return fmt.Sprintf("%s\n\n[ ... %d lines omitted ... ]\n\n%s",
+			head, len(lines)-280, tail)
 	}
 
 	return content
@@ -315,7 +358,7 @@ func buildDirTree(root string, maxDepth int) string {
 			return entries[i].Name() < entries[j].Name()
 		})
 		for i, entry := range entries {
-			if ignoredDirs[entry.Name()] {
+			if shouldIgnoreDir(entry.Name()) {
 				continue
 			}
 			isLast := i == len(entries)-1
@@ -370,12 +413,12 @@ func extractPackageJSONSummary(content string) string {
 				result = append(result, "  "+strings.Trim(parts[0], `" `))
 				depCount++
 			} else if depCount == 30 {
-				result = append(result, "  [ ... more deps ... ]")
+				result = append(result, "  [ ... more ... ]")
 				depCount++
 			}
 			continue
 		}
-		for _, field := range []string{`"name"`, `"version"`, `"description"`, `"main"`, `"type"`, `"author"`, `"repository"`, `"keywords"`} {
+		for _, field := range []string{`"name"`, `"version"`, `"description"`, `"main"`, `"type"`, `"author"`, `"repository"`, `"keywords"`, `"homepage"`} {
 			if strings.Contains(trimmed, field) {
 				result = append(result, line)
 				break
@@ -402,7 +445,7 @@ func extractComposerJSONSummary(content string) string {
 			if strings.Contains(trimmed, "}") {
 				inRequire = false
 				result = append(result, line)
-			} else if reqCount < 20 {
+			} else if reqCount < 25 {
 				parts := strings.SplitN(trimmed, ":", 2)
 				result = append(result, "  "+strings.Trim(parts[0], `" `))
 				reqCount++

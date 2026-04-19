@@ -104,7 +104,7 @@ func callOpenAI(apiKey, model, prompt string) (string, error) {
 		Model:       model,
 		Messages:    []openAIMessage{{Role: "user", Content: prompt}},
 		Temperature: 0.1,
-		MaxTokens:   2048,
+		MaxTokens:   8192, // enough for full project analysis
 	})
 	req, _ := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+apiKey)
@@ -164,11 +164,29 @@ func callGemini(apiKey, model, prompt string) (string, error) {
 	if apiKey == "" {
 		return "", fmt.Errorf("Gemini API key not set — run: ccbootstrap settings")
 	}
-	reqBody := geminiRequest{
-		Contents: []geminiContent{{Parts: []geminiPart{{Text: prompt}}}},
+
+	type Part struct {
+		Text string `json:"text"`
 	}
-	reqBody.GenerationConfig.Temperature = 0.1
-	reqBody.GenerationConfig.MaxOutputTokens = 2048
+	type Content struct {
+		Parts []Part `json:"parts"`
+	}
+	type GenConfig struct {
+		Temperature     float64 `json:"temperature"`
+		MaxOutputTokens int     `json:"maxOutputTokens"`
+	}
+	type GeminiReq struct {
+		Contents         []Content `json:"contents"`
+		GenerationConfig GenConfig `json:"generationConfig"`
+	}
+
+	reqBody := GeminiReq{
+		Contents: []Content{{Parts: []Part{{Text: prompt}}}},
+		GenerationConfig: GenConfig{
+			Temperature:     0.1,
+			MaxOutputTokens: 16384, // Gemini 2.x supports up to 65535
+		},
+	}
 
 	body, _ := json.Marshal(reqBody)
 	url := fmt.Sprintf(
