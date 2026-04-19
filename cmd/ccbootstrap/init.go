@@ -13,7 +13,7 @@ import (
 	"github.com/abdessama-cto/ccb/internal/config"
 	"github.com/abdessama-cto/ccb/internal/generator"
 	ghpkg "github.com/abdessama-cto/ccb/internal/github"
-	aipkg "github.com/abdessama-cto/ccb/internal/openai"
+	"github.com/abdessama-cto/ccb/internal/llm"
 	"github.com/abdessama-cto/ccb/internal/skills"
 	"github.com/abdessama-cto/ccb/internal/tui"
 	"github.com/spf13/cobra"
@@ -126,22 +126,28 @@ func runInit(cmd *cobra.Command, args []string) error {
 	printFingerprint(fp)
 
 	// ── Step 3b: Semantic analysis (AI) ───────────────────────────────────
-	var understanding *aipkg.ProjectUnderstanding
+	var understanding *llm.ProjectUnderstanding
 	cfg, _ := config.Load()
-	if cfg.AI.Enabled && cfg.AI.APIKey != "" {
-		tui.Info("Reading key files for AI understanding...")
+	if cfg.AI.IsConfigured() {
+		tui.Info(fmt.Sprintf("Reading key files for AI understanding (%s / %s)...",
+			cfg.AI.Provider, cfg.AI.ActiveModel()))
 		semCtx := analyzer.ExtractSemanticContext(destDir)
-		tui.Info(fmt.Sprintf("  %d files extracted (~%dk tokens) — sending to %s...",
-			len(semCtx.Files), semCtx.TokenEst/1000, cfg.AI.Model))
+		tui.Info(fmt.Sprintf("  %d files extracted (~%dk tokens)...",
+			len(semCtx.Files), semCtx.TokenEst/1000))
 		prompt := analyzer.BuildAIPrompt(semCtx, fp)
-		understanding, err = aipkg.UnderstandProject(cfg.AI.APIKey, cfg.AI.Model, prompt)
+		understanding, err = llm.UnderstandProject(llm.Config{
+			Provider:  llm.Provider(cfg.AI.Provider),
+			Model:     cfg.AI.ActiveModel(),
+			APIKey:    cfg.AI.ActiveKey(),
+			OllamaURL: cfg.AI.OllamaURL,
+		}, prompt)
 		if err != nil {
 			tui.Warn(fmt.Sprintf("AI understanding failed: %s — continuing with static analysis", err.Error()))
 		} else {
 			printUnderstanding(understanding)
 		}
 	} else {
-		tui.Warn("No OpenAI API key — skipping AI understanding. Run: ccbootstrap settings")
+		tui.Warn("No AI provider configured — skipping AI understanding. Run: ccbootstrap settings")
 	}
 
 	// ── Step 4: Questionnaire ─────────────────────────────────────────────
@@ -371,7 +377,7 @@ func boolEmoji2(v bool) string {
 	return "❌ not found"
 }
 
-func printUnderstanding(u *aipkg.ProjectUnderstanding) {
+func printUnderstanding(u *llm.ProjectUnderstanding) {
 	fmt.Printf("\n%s AI Understanding\n", tui.Bold("🧠"))
 	if u.ProjectName != "" {
 		fmt.Printf("   %-16s : %s\n", "Name", tui.Cyan(u.ProjectName))

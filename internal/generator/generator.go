@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/abdessama-cto/ccb/internal/analyzer"
-	aipkg "github.com/abdessama-cto/ccb/internal/openai"
+	"github.com/abdessama-cto/ccb/internal/llm"
 )
 
 // Questionnaire holds answers from the interactive setup
@@ -29,7 +29,7 @@ type Questionnaire struct {
 }
 
 // Generate creates the full Claude Code config in targetDir
-func Generate(targetDir string, fp *analyzer.ProjectFingerprint, q *Questionnaire, understanding *aipkg.ProjectUnderstanding) error {
+func Generate(targetDir string, fp *analyzer.ProjectFingerprint, q *Questionnaire, understanding *llm.ProjectUnderstanding) error {
 	dirs := []string{
 		filepath.Join(targetDir, ".claude", "rules"),
 		filepath.Join(targetDir, ".claude", "hooks"),
@@ -100,7 +100,7 @@ func Generate(targetDir string, fp *analyzer.ProjectFingerprint, q *Questionnair
 
 // ─── CLAUDE.md ────────────────────────────────────────────────────────────────
 
-func generateClaudeMD(fp *analyzer.ProjectFingerprint, q *Questionnaire, understanding *aipkg.ProjectUnderstanding) string {
+func generateClaudeMD(fp *analyzer.ProjectFingerprint, q *Questionnaire, understanding *llm.ProjectUnderstanding) string {
 	repoName := repoNameFromURL(fp.RepoURL)
 
 	// Use AI understanding if available
@@ -560,7 +560,7 @@ exit 0
 
 // ─── Docs ─────────────────────────────────────────────────────────────────────
 
-func generateArchitectureMD(fp *analyzer.ProjectFingerprint, understanding *aipkg.ProjectUnderstanding) string {
+func generateArchitectureMD(fp *analyzer.ProjectFingerprint, understanding *llm.ProjectUnderstanding) string {
 	if understanding != nil && understanding.Architecture != "" {
 		endpoints := ""
 		if len(understanding.APIEndpoints) > 0 {

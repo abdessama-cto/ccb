@@ -13,11 +13,61 @@ var ConfigDir = filepath.Join(os.Getenv("HOME"), ".ccbootstrap")
 var ConfigFile = filepath.Join(ConfigDir, "config.yaml")
 
 type AIConfig struct {
-	Enabled         bool    `yaml:"enabled"`
-	Provider        string  `yaml:"provider"`
-	Model           string  `yaml:"model"`
-	APIKey          string  `yaml:"api_key,omitempty"`
+	Enabled bool   `yaml:"enabled"`
+	Provider string `yaml:"provider"` // "openai" | "gemini" | "ollama"
+
+	// OpenAI
+	OpenAIKey   string `yaml:"openai_key,omitempty"`
+	OpenAIModel string `yaml:"openai_model"`
+
+	// Google Gemini
+	GeminiKey   string `yaml:"gemini_key,omitempty"`
+	GeminiModel string `yaml:"gemini_model"`
+
+	// Ollama (local)
+	OllamaURL   string `yaml:"ollama_url"`
+	OllamaModel string `yaml:"ollama_model"`
+
 	MonthlyBudgetUSD float64 `yaml:"monthly_budget_usd"`
+}
+
+// ActiveKey returns the API key for the currently selected provider
+func (a *AIConfig) ActiveKey() string {
+	switch a.Provider {
+	case "gemini":
+		return a.GeminiKey
+	case "ollama":
+		return "ollama" // Ollama doesn't need a real key
+	default:
+		return a.OpenAIKey
+	}
+}
+
+// ActiveModel returns the model for the currently selected provider
+func (a *AIConfig) ActiveModel() string {
+	switch a.Provider {
+	case "gemini":
+		return a.GeminiModel
+	case "ollama":
+		return a.OllamaModel
+	default:
+		return a.OpenAIModel
+	}
+}
+
+// IsConfigured returns true if the active provider has what it needs to work
+func (a *AIConfig) IsConfigured() bool {
+	if !a.Enabled {
+		return false
+	}
+	switch a.Provider {
+	case "gemini":
+		return a.GeminiKey != ""
+	case "ollama":
+		return true // no key needed
+	default:
+		return a.OpenAIKey != ""
+	}
 }
 
 type UIConfig struct {
@@ -45,9 +95,12 @@ type Config struct {
 func Default() *Config {
 	return &Config{
 		AI: AIConfig{
-			Enabled:         true,
-			Provider:        "openai",
-			Model:           "gpt-4o-mini",
+			Enabled:          true,
+			Provider:         "openai",
+			OpenAIModel:      "gpt-4o-mini",
+			GeminiModel:      "gemini-2.0-flash",
+			OllamaURL:        "http://localhost:11434",
+			OllamaModel:      "llama3.2",
 			MonthlyBudgetUSD: 5.0,
 		},
 		UI: UIConfig{
@@ -63,6 +116,7 @@ func Default() *Config {
 		},
 	}
 }
+
 
 func EnsureDirs() error {
 	dirs := []string{
