@@ -26,21 +26,21 @@ func init() {
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {
-	tui.Info("Checking for updates...")
+	checkSpin := tui.StartSpinner("Checking for updates...")
 
 	arch := fmt.Sprintf("%s-%s", runtime.GOOS, hostArch())
 
 	latestVersion, err := fetchLatestVersion()
 	if err != nil {
+		checkSpin.Fail("Could not check for updates")
 		return err
 	}
 
 	if latestVersion == "v"+Version {
-		tui.Success(fmt.Sprintf("Already up to date (%s)", Version))
+		checkSpin.Success(fmt.Sprintf("Already up to date (%s)", Version))
 		return nil
 	}
-
-	tui.Info(fmt.Sprintf("New version available: %s → %s", Version, latestVersion))
+	checkSpin.Success(fmt.Sprintf("New version available: %s → %s", Version, latestVersion))
 
 	exe, err := os.Executable()
 	if err != nil {
@@ -54,7 +54,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 	tmpPath := exe + ".new"
 
-	tui.Info(fmt.Sprintf("Downloading %s...", latestVersion))
+	dlSpin := tui.StartSpinner(fmt.Sprintf("Downloading %s...", latestVersion))
 	var lastErr error
 	var downloaded bool
 	for _, url := range candidates {
@@ -67,8 +67,10 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		break
 	}
 	if !downloaded {
+		dlSpin.Fail("Download failed")
 		return fmt.Errorf("download failed: %w", lastErr)
 	}
+	dlSpin.Success(fmt.Sprintf("Downloaded %s", latestVersion))
 
 	if err := os.Chmod(tmpPath, 0755); err != nil {
 		_ = os.Remove(tmpPath)

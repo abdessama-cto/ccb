@@ -26,8 +26,19 @@ func StartSpinner(initialMsg string) *Spinner {
 		done:  make(chan struct{}),
 	}
 	s.msg.Store(initialMsg)
+	s.render(0)
 	go s.loop()
 	return s
+}
+
+func (s *Spinner) render(frameIdx int) {
+	msg, _ := s.msg.Load().(string)
+	elapsed := time.Since(s.start).Round(time.Second)
+	fmt.Printf("\r\033[K%s %s %s",
+		Cyan(spinnerFrames[frameIdx%len(spinnerFrames)]),
+		msg,
+		Dim(fmt.Sprintf("(%s)", elapsed)),
+	)
 }
 
 // Update swaps the message shown next to the animated frame.
@@ -39,20 +50,14 @@ func (s *Spinner) loop() {
 	defer close(s.done)
 	t := time.NewTicker(80 * time.Millisecond)
 	defer t.Stop()
-	i := 0
+	i := 1
 	for {
 		select {
 		case <-s.stop:
 			fmt.Print("\r\033[K")
 			return
 		case <-t.C:
-			msg, _ := s.msg.Load().(string)
-			elapsed := time.Since(s.start).Round(time.Second)
-			fmt.Printf("\r\033[K%s %s %s",
-				Cyan(spinnerFrames[i%len(spinnerFrames)]),
-				msg,
-				Dim(fmt.Sprintf("(%s)", elapsed)),
-			)
+			s.render(i)
 			i++
 		}
 	}

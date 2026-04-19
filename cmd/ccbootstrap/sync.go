@@ -23,14 +23,15 @@ func init() {
 }
 
 func runSync(cmd *cobra.Command, args []string) error {
-	tui.Info("Pinging https://skills.sh ...")
+	sp := tui.StartSpinner("Pinging https://skills.sh ...")
 	start := time.Now()
 	results, err := skills.Search("test", 1)
 	elapsed := time.Since(start).Round(time.Millisecond)
 	if err != nil {
+		sp.Fail("skills.sh unreachable")
 		return fmt.Errorf("skills.sh unreachable: %w", err)
 	}
-	tui.Success(fmt.Sprintf("Catalog reachable (%s, %d sample result)", elapsed, len(results)))
+	sp.Success(fmt.Sprintf("Catalog reachable (%s, %d sample result)", elapsed, len(results)))
 	if len(results) > 0 {
 		s := results[0]
 		fmt.Printf("  sample: %s  ·  %s  ·  %d installs\n", tui.Cyan(s.SkillID), tui.Dim(s.Source), s.Installs)

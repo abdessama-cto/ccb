@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -18,6 +19,15 @@ type GeneratedFile struct {
 type GenerationResult struct {
 	Files []GeneratedFile `json:"files"`
 }
+
+// File block delimiters used by the plain-text generation protocol. This
+// format avoids JSON entirely so the LLM doesn't have to escape quotes,
+// backslashes, or newlines inside long freeform content — which is the
+// root cause of parse failures we kept hitting.
+const (
+	fileOpenMarker  = "=== FILE:"
+	fileCloseMarker = "=== END FILE ==="
+)
 
 // GenerateFiles makes a single LLM call that produces every dynamic file
 // Claude Code needs: CLAUDE.md, rules, agents, skills, docs. Structural
@@ -52,7 +62,7 @@ func buildGenerationPrompt(
 	sb.WriteString(`You are writing the Claude Code configuration for a specific project.
 Produce the full content of every file listed in the OUTPUT MANIFEST below.
 
-RULES:
+CONTENT RULES:
 - Use the project understanding, the wizard answers, and the selected items as input.
 - Tailor every file to THIS project. Do NOT write generic boilerplate that would apply anywhere.
 - Agents and skills: include YAML frontmatter with "name", "description", and "tools" when relevant.
@@ -62,14 +72,36 @@ RULES:
   project conventions, and strict rules. Keep it under ~150 lines.
 - docs/architecture.md: expand on architecture with module breakdown, data flow, external services.
 
-Return ONLY this JSON (no markdown fences, no preamble, no trailing text):
-{
-  "files": [
-    { "path": "CLAUDE.md", "content": "..." },
-    { "path": ".claude/rules/01-core-behavior.md", "content": "..." },
-    ...
-  ]
-}
+OUTPUT FORMAT — STRICTLY FOLLOW THIS (NOT JSON):
+
+For every file, emit a block delimited by these exact markers on their own lines:
+
+=== FILE: <relative/path> ===
+<raw file content here — no escaping, no JSON, no backticks wrapping>
+=== END FILE ===
+
+Rules for the format:
+- The opening marker MUST be "=== FILE: " followed by the path and " ===" on a single line.
+- The closing marker MUST be exactly "=== END FILE ===" on its own line.
+- Put the raw file content between the markers, exactly as it should be written to disk.
+- You do NOT need to escape quotes, backslashes, or newlines — write content as-is.
+- Do NOT wrap the content in triple backticks or any code fence.
+- Do NOT add commentary, preamble, or trailing prose outside the blocks.
+- Produce every file from the manifest in order.
+
+Example (for illustration only — produce the actual files requested below):
+
+=== FILE: CLAUDE.md ===
+# My Project
+
+Some prose with "quotes" and \backslashes\ that need no escaping.
+=== END FILE ===
+
+=== FILE: .claude/rules/01-core-behavior.md ===
+# Core Behavior
+- Rule 1
+- Rule 2
+=== END FILE ===
 
 `)
 
@@ -132,27 +164,127 @@ Return ONLY this JSON (no markdown fences, no preamble, no trailing text):
 	return sb.String()
 }
 
+// parseGeneration scans the LLM output for `=== FILE: path ===` / `=== END FILE ===`
+// blocks and collects them into a GenerationResult. Content between markers
+// is preserved verbatim — no unescaping required.
+//
+// Backward compatibility: if the LLM returned JSON (older format), we fall
+// back to the JSON parser with the sanitizer.
 func parseGeneration(raw string) (*GenerationResult, error) {
-	raw = StripJSONFences(raw)
+	files := scanFileBlocks(raw)
+	if len(files) > 0 {
+		return &GenerationResult{Files: sanitizePaths(files)}, nil
+	}
 
+	// Fallback: try legacy JSON parse (still sanitized).
+	cleaned := StripJSONFences(raw)
 	var res GenerationResult
-	if err := json.Unmarshal([]byte(raw), &res); err != nil {
+	if err := json.Unmarshal([]byte(cleaned), &res); err != nil {
 		preview := raw
 		if len(preview) > 400 {
 			preview = preview[:400]
 		}
-		return nil, fmt.Errorf("generation JSON parse failed: %w (raw preview: %s)", err, preview)
+		return nil, fmt.Errorf("generation parse failed: no file blocks found and JSON fallback failed: %w (preview: %s)", err, preview)
+	}
+	return &GenerationResult{Files: sanitizePaths(res.Files)}, nil
+}
+
+// scanFileBlocks extracts every `=== FILE: path === ... === END FILE ===`
+// block from the LLM output. Tolerant of whitespace and surrounding prose.
+func scanFileBlocks(raw string) []GeneratedFile {
+	var files []GeneratedFile
+	scanner := bufio.NewScanner(strings.NewReader(raw))
+	// Allow long lines — default buffer is 64KB which is too small for full files.
+	buf := make([]byte, 0, 1024*1024)
+	scanner.Buffer(buf, 8*1024*1024)
+
+	var (
+		inBlock bool
+		curPath string
+		curBody strings.Builder
+	)
+
+	flush := func() {
+		if inBlock && curPath != "" {
+			files = append(files, GeneratedFile{
+				Path:    curPath,
+				Content: strings.TrimRight(curBody.String(), "\n") + "\n",
+			})
+		}
+		inBlock = false
+		curPath = ""
+		curBody.Reset()
 	}
 
-	// Filter out empty or unsafe paths
-	clean := make([]GeneratedFile, 0, len(res.Files))
-	for _, f := range res.Files {
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+
+		if !inBlock {
+			if path, ok := parseFileOpenLine(trimmed); ok {
+				inBlock = true
+				curPath = path
+				curBody.Reset()
+			}
+			continue
+		}
+
+		// Inside a block.
+		if trimmed == fileCloseMarker {
+			flush()
+			continue
+		}
+		// Handle back-to-back blocks where the LLM forgot the closing marker.
+		if path, ok := parseFileOpenLine(trimmed); ok {
+			flush()
+			inBlock = true
+			curPath = path
+			curBody.Reset()
+			continue
+		}
+
+		curBody.WriteString(line)
+		curBody.WriteByte('\n')
+	}
+
+	// Final unclosed block — accept it rather than drop the LLM's work.
+	if inBlock && curPath != "" {
+		files = append(files, GeneratedFile{
+			Path:    curPath,
+			Content: strings.TrimRight(curBody.String(), "\n") + "\n",
+		})
+	}
+	return files
+}
+
+// parseFileOpenLine returns the path if the line is an opening marker.
+// Accepts "=== FILE: path ===" and "=== FILE: path===" variants.
+func parseFileOpenLine(line string) (string, bool) {
+	if !strings.HasPrefix(line, fileOpenMarker) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(line, fileOpenMarker)
+	rest = strings.TrimSpace(rest)
+	// Strip the trailing "===".
+	rest = strings.TrimSuffix(rest, "===")
+	path := strings.TrimSpace(rest)
+	if path == "" {
+		return "", false
+	}
+	return path, true
+}
+
+// sanitizePaths drops empty/unsafe paths so we never escape the project root.
+func sanitizePaths(files []GeneratedFile) []GeneratedFile {
+	clean := make([]GeneratedFile, 0, len(files))
+	for _, f := range files {
 		p := strings.TrimSpace(f.Path)
 		if p == "" || strings.Contains(p, "..") || strings.HasPrefix(p, "/") {
 			continue
 		}
+		// Strip backticks if the LLM wrapped the path.
+		p = strings.Trim(p, "`'\" ")
 		clean = append(clean, GeneratedFile{Path: p, Content: f.Content})
 	}
-	res.Files = clean
-	return &res, nil
+	return clean
 }

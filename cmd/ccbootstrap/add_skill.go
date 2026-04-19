@@ -40,14 +40,17 @@ func runAddSkill(cmd *cobra.Command, args []string) error {
 
 	// ── Direct-install mode ──────────────────────────────────────────────────
 	query := args[0]
-	tui.Info(fmt.Sprintf("Searching skills.sh for %q...", query))
+	searchSpin := tui.StartSpinner(fmt.Sprintf("Searching skills.sh for %q...", query))
 	results, err := skills.Search(query, 20)
 	if err != nil {
+		searchSpin.Fail("Search failed")
 		return fmt.Errorf("search failed: %w", err)
 	}
 	if len(results) == 0 {
+		searchSpin.Fail(fmt.Sprintf("No skills matched %q", query))
 		return fmt.Errorf("no skills matched %q", query)
 	}
+	searchSpin.Success(fmt.Sprintf("Found %d result(s)", len(results)))
 
 	// Prefer an exact match on skillId, else the top result.
 	chosen := results[0]
@@ -57,10 +60,15 @@ func runAddSkill(cmd *cobra.Command, args []string) error {
 			break
 		}
 	}
-	tui.Info(fmt.Sprintf("Installing %s from %s (%d installs)...",
+	installSpin := tui.StartSpinner(fmt.Sprintf("Installing %s from %s (%d installs)...",
 		chosen.SkillID, chosen.Source, chosen.Installs))
-
-	return fetchAndWriteSkill(projectDir, &chosen)
+	err = fetchAndWriteSkill(projectDir, &chosen)
+	if err != nil {
+		installSpin.Fail("Install failed")
+		return err
+	}
+	installSpin.Success(fmt.Sprintf("Installed %s at .claude/skills/%s.md", chosen.SkillID, chosen.SkillID))
+	return nil
 }
 
 // runAddSkillInteractive shows the TUI picker with an empty main list; the
@@ -84,6 +92,7 @@ func runAddSkillInteractive(projectDir string) error {
 			tui.Warn(fmt.Sprintf("  %s: %s — skipping", ref.SkillID, err.Error()))
 			continue
 		}
+		fmt.Printf("  %s .claude/skills/%s.md\n", tui.Green("✓"), ref.SkillID)
 		installed++
 	}
 	if installed == 0 {
@@ -112,7 +121,5 @@ func fetchAndWriteSkill(projectDir string, s *skills.Skill) error {
 	if err := os.WriteFile(dest, []byte(s.Content), 0644); err != nil {
 		return err
 	}
-	rel, _ := filepath.Rel(projectDir, dest)
-	fmt.Printf("  %s %s\n", tui.Green("✓"), rel)
 	return nil
 }

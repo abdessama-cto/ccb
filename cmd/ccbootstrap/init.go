@@ -61,12 +61,14 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Step 2: Static analysis ──────────────────────────────────────────────
-	tui.Info("Analyzing codebase (static)...")
+	analyzeSpin := tui.StartSpinner("Analyzing codebase (static)...")
 	commits := ghpkg.CountCommits(destDir)
 	fp, err := analyzer.Analyze(destDir, repoURL, commits)
 	if err != nil {
+		analyzeSpin.Fail("Static analysis failed")
 		return fmt.Errorf("analysis failed: %w", err)
 	}
+	analyzeSpin.Success(fmt.Sprintf("Static analysis done · %s across %d files", fp.StackString(), fp.Files))
 	printFingerprint(fp)
 
 	// ── Step 3: AI configuration check ───────────────────────────────────────
@@ -139,17 +141,25 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Fetch external skills (skills.sh) directly from GitHub raw.
 	if len(extSkills) > 0 {
-		tui.Info(fmt.Sprintf("Fetching %d skill(s) from skills.sh...", len(extSkills)))
-		for _, s := range extSkills {
+		skillsSpin := tui.StartSpinner(fmt.Sprintf("Fetching %d skill(s) from skills.sh...", len(extSkills)))
+		var fetched, failed int
+		for i, s := range extSkills {
+			skillsSpin.Update(fmt.Sprintf("Fetching %d/%d from skills.sh: %s", i+1, len(extSkills), s.Name))
 			ref := skills.Skill{ID: s.ExternalID, Source: s.ExternalSource, SkillID: s.Name}
 			if err := skills.FetchContent(&ref); err != nil {
-				tui.Warn(fmt.Sprintf("  %s: %s — skipping", s.Name, err.Error()))
+				failed++
 				continue
 			}
+			fetched++
 			genResult.Files = append(genResult.Files, llm.GeneratedFile{
 				Path:    ".claude/skills/" + s.Filename,
 				Content: ref.Content,
 			})
+		}
+		if failed == 0 {
+			skillsSpin.Success(fmt.Sprintf("Fetched %d skill(s) from skills.sh", fetched))
+		} else {
+			skillsSpin.Success(fmt.Sprintf("Fetched %d · %d failed", fetched, failed))
 		}
 	}
 
@@ -168,16 +178,14 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// ── Step 7: Run tests (regression check) ─────────────────────────────────
 	if !initFlags.dryRun && q.RunTests && len(fp.TestFrameworks) > 0 {
-		tui.Info("Running existing test suite for regression check...")
 		testCmd := buildTestCmdForStack(fp)
 		if testCmd != nil {
+			testSpin := tui.StartSpinner("Running existing test suite for regression check...")
 			testCmd.Dir = destDir
-			testCmd.Stdout = os.Stdout
-			testCmd.Stderr = os.Stderr
 			if err := testCmd.Run(); err != nil {
-				tui.Warn("Some tests failed — review before committing.")
+				testSpin.Fail("Some tests failed — review before committing.")
 			} else {
-				tui.Success("All tests green")
+				testSpin.Success("All tests green")
 			}
 		}
 	}
@@ -224,12 +232,13 @@ func resolveDestination(args []string) (destDir, repoURL string, err error) {
 
 	// Clone mode
 	repoURL = args[0]
-	tui.Info("Checking GitHub auth...")
+	authSpin := tui.StartSpinner("Checking GitHub auth...")
 	user, authErr := ghpkg.CheckAuth()
 	if authErr != nil {
+		authSpin.Fail("GitHub auth failed")
 		return "", "", authErr
 	}
-	tui.Success(fmt.Sprintf("GitHub auth OK (user: @%s)", user))
+	authSpin.Success(fmt.Sprintf("GitHub auth OK (user: @%s)", user))
 
 	repoName := ghpkg.RepoNameFromURL(repoURL)
 	homeDir, _ := os.UserHomeDir()
@@ -237,17 +246,17 @@ func resolveDestination(args []string) (destDir, repoURL string, err error) {
 	destDir = filepath.Join(projectsDir, repoName)
 
 	if _, statErr := os.Stat(destDir); statErr == nil {
-		tui.Warn(fmt.Sprintf("Already cloned. Pulling latest changes in %s...", destDir))
+		pullSpin := tui.StartSpinner(fmt.Sprintf("Already cloned — pulling latest changes in %s", destDir))
 		pullCmd := exec.Command("git", "-C", destDir, "pull")
-		pullCmd.Stdout = os.Stdout
-		pullCmd.Stderr = os.Stderr
 		_ = pullCmd.Run()
+		pullSpin.Success("Pulled latest")
 	} else {
-		tui.Info(fmt.Sprintf("Cloning %s...", repoURL))
+		cloneSpin := tui.StartSpinner(fmt.Sprintf("Cloning %s...", repoURL))
 		if cloneErr := ghpkg.CloneRepo(repoURL, destDir); cloneErr != nil {
+			cloneSpin.Fail("Clone failed")
 			return "", "", fmt.Errorf("clone failed: %w", cloneErr)
 		}
-		tui.Success("Clone complete")
+		cloneSpin.Success("Clone complete")
 	}
 	return destDir, repoURL, nil
 }
@@ -281,19 +290,22 @@ func ensureUnderstanding(destDir string, fp *analyzer.ProjectFingerprint, cfg *c
 	}
 
 	// ── Fresh analysis ───────────────────────────────────────────────────────
-	tui.Info(fmt.Sprintf("Reading full codebase for AI understanding (%s / %s)...",
+	extractSpin := tui.StartSpinner(fmt.Sprintf("Reading full codebase for AI understanding (%s / %s)...",
 		cfg.AI.Provider, cfg.AI.ActiveModel()))
 	semCtx := analyzer.ExtractSemanticContext(destDir)
-	tui.Info(fmt.Sprintf("  %d files · ~%dk tokens extracted",
+	extractSpin.Success(fmt.Sprintf("Extracted %d files · ~%dk tokens",
 		len(semCtx.Files), semCtx.TokenEst/1000))
 
 	prompt := analyzer.BuildAIPromptLimited(semCtx, fp, llmCfg.MaxContextChars)
-	tui.Info(fmt.Sprintf("  Sending %dk chars to %s...", len(prompt)/1000, cfg.AI.ActiveModel()))
+	understandSpin := tui.StartSpinner(fmt.Sprintf("Sending %dk chars to %s, waiting for understanding...",
+		len(prompt)/1000, cfg.AI.ActiveModel()))
 
 	understanding, err := llm.UnderstandProject(llmCfg, prompt)
 	if err != nil {
+		understandSpin.Fail("AI understanding failed")
 		return nil, fmt.Errorf("AI understanding failed: %w", err)
 	}
+	understandSpin.Success("AI understanding ready")
 	printUnderstanding(understanding)
 
 	// Persist to cache
@@ -311,16 +323,17 @@ func ensureUnderstanding(destDir string, fp *analyzer.ProjectFingerprint, cfg *c
 // runDynamicWizard asks the LLM to generate project-specific questions, then
 // displays them in a wizard UI. Returns the answers or uses defaults in --yes mode.
 func runDynamicWizard(llmCfg llm.Config, u *llm.ProjectUnderstanding, fp *analyzer.ProjectFingerprint) ([]llm.WizardAnswer, error) {
-	tui.Info("Asking AI for project-specific questions...")
+	sp := tui.StartSpinner("Asking AI for project-specific questions...")
 	questions, err := llm.GenerateWizardQuestions(llmCfg, u, fp)
 	if err != nil {
+		sp.Fail("Wizard question generation failed")
 		return nil, err
 	}
 	if len(questions) == 0 {
-		tui.Info("AI had no project-specific questions — skipping wizard")
+		sp.Success("AI had no project-specific questions — skipping wizard")
 		return nil, nil
 	}
-	tui.Success(fmt.Sprintf("Generated %d question(s) tailored to this project", len(questions)))
+	sp.Success(fmt.Sprintf("Generated %d question(s) tailored to this project", len(questions)))
 
 	if initFlags.yes || initFlags.skipQuestionnaire {
 		tui.Info("Skipping wizard — using AI-suggested defaults")

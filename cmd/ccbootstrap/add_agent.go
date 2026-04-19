@@ -55,16 +55,19 @@ func runAddAgent(cmd *cobra.Command, args []string) error {
 		Language:        cfg.UI.Language,
 	}
 
+	var sp *tui.Spinner
 	if nameHint != "" {
-		tui.Info(fmt.Sprintf("Generating agent for %q...", nameHint))
+		sp = tui.StartSpinner(fmt.Sprintf("Generating agent for %q...", nameHint))
 	} else {
-		tui.Info("Asking AI for the most valuable missing agent for this project...")
+		sp = tui.StartSpinner("Asking AI for the most valuable missing agent for this project...")
 	}
 
 	agent, err := llm.GenerateAgent(llmCfg, cached.Understanding, cached.Fingerprint, nameHint)
 	if err != nil {
+		sp.Fail("Agent generation failed")
 		return fmt.Errorf("agent generation failed: %w", err)
 	}
+	sp.Success(fmt.Sprintf("Agent ready: %s", agent.Name))
 
 	agentsDir := filepath.Join(projectDir, ".claude", "agents")
 	if err := os.MkdirAll(agentsDir, 0755); err != nil {
