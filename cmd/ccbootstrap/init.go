@@ -27,12 +27,15 @@ var initFlags struct {
 }
 
 var initCmd = &cobra.Command{
-	Use:   "init <repo-url>",
-	Short: "Bootstrap Claude Code config for any GitHub repo",
-	Long: `Clone a GitHub repo, analyze its codebase, ask 10 setup questions,
-then generate a complete Claude Code configuration (CLAUDE.md, .claude/, docs/),
-install skills, run tests, and open a PR.`,
-	Args: cobra.ExactArgs(1),
+	Use:   "init [repo-url|.]",
+	Short: "Bootstrap Claude Code config (GitHub repo or local directory)",
+	Long: `Two modes:
+  1. ccbootstrap init <github-url>  — clone & bootstrap a GitHub repo
+  2. ccbootstrap init               — bootstrap the current local directory
+  3. ccbootstrap init .             — same as above
+
+Generates CLAUDE.md, .claude/ (rules, hooks, commands), docs/, installs skills, and opens a PR.`,
+	Args: cobra.RangeArgs(0, 1),
 	RunE: runInit,
 }
 
@@ -47,37 +50,68 @@ func init() {
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
-	repoURL := args[0]
 	startTime := time.Now()
-
 	tui.Banner(Version)
 
-	// ── Step 1: GitHub auth ────────────────────────────────────────────────
-	tui.Info("Checking GitHub auth...")
-	user, err := ghpkg.CheckAuth()
-	if err != nil {
-		return err
+	// Determine mode: local or GitHub
+	useLocal := len(args) == 0 || args[0] == "." || args[0] == ""
+	isGitHubURL := len(args) > 0 && (strings.HasPrefix(args[0], "http") || strings.HasPrefix(args[0], "git@"))
+
+	// If no args and not --yes, ask the user to choose
+	if !useLocal && !isGitHubURL && len(args) > 0 {
+		useLocal = true // treat anything that's not a URL as a local path
 	}
-	tui.Success(fmt.Sprintf("GitHub auth OK (user: @%s)", user))
 
-	// ── Step 2: Clone ──────────────────────────────────────────────────────
-	repoName := ghpkg.RepoNameFromURL(repoURL)
-	homeDir, _ := os.UserHomeDir()
-	projectsDir := filepath.Join(homeDir, ".ccbootstrap", "projects")
-	destDir := filepath.Join(projectsDir, repoName)
+	var repoURL string
+	var destDir string
+	var err error
 
-	if _, err := os.Stat(destDir); err == nil {
-		tui.Warn(fmt.Sprintf("Directory %s already exists. Pulling latest...", destDir))
-		pullCmd := exec.Command("git", "-C", destDir, "pull")
-		pullCmd.Stdout = os.Stdout
-		pullCmd.Stderr = os.Stderr
-		_ = pullCmd.Run()
-	} else {
-		tui.Info(fmt.Sprintf("Cloning %s...", repoURL))
-		if err := ghpkg.CloneRepo(repoURL, destDir); err != nil {
-			return fmt.Errorf("clone failed: %w", err)
+	if useLocal {
+		// ── LOCAL MODE ────────────────────────────────────────────────────
+		destDir, err = os.Getwd()
+		if err != nil {
+			return fmt.Errorf("could not determine current directory: %w", err)
 		}
-		tui.Success("Clone complete")
+		// Verify it's a git repo
+		if _, statErr := os.Stat(filepath.Join(destDir, ".git")); statErr != nil {
+			return fmt.Errorf("current directory is not a git repository: %s", destDir)
+		}
+		// Try to get the remote URL for fingerprinting
+		if remoteOut, remoteErr := exec.Command("git", "-C", destDir, "remote", "get-url", "origin").Output(); remoteErr == nil {
+			repoURL = strings.TrimSpace(string(remoteOut))
+		} else {
+			repoURL = destDir // fallback
+		}
+		tui.Success(fmt.Sprintf("Using local project: %s", tui.Bold(filepath.Base(destDir))))
+	} else {
+		// ── GITHUB CLONE MODE ─────────────────────────────────────────────
+		repoURL = args[0]
+
+		tui.Info("Checking GitHub auth...")
+		user, authErr := ghpkg.CheckAuth()
+		if authErr != nil {
+			return authErr
+		}
+		tui.Success(fmt.Sprintf("GitHub auth OK (user: @%s)", user))
+
+		repoName := ghpkg.RepoNameFromURL(repoURL)
+		homeDir, _ := os.UserHomeDir()
+		projectsDir := filepath.Join(homeDir, ".ccbootstrap", "projects")
+		destDir = filepath.Join(projectsDir, repoName)
+
+		if _, statErr := os.Stat(destDir); statErr == nil {
+			tui.Warn(fmt.Sprintf("Already cloned. Pulling latest changes in %s...", destDir))
+			pullCmd := exec.Command("git", "-C", destDir, "pull")
+			pullCmd.Stdout = os.Stdout
+			pullCmd.Stderr = os.Stderr
+			_ = pullCmd.Run()
+		} else {
+			tui.Info(fmt.Sprintf("Cloning %s...", repoURL))
+			if cloneErr := ghpkg.CloneRepo(repoURL, destDir); cloneErr != nil {
+				return fmt.Errorf("clone failed: %w", cloneErr)
+			}
+			tui.Success("Clone complete")
+		}
 	}
 
 	// ── Step 3: Analyze ───────────────────────────────────────────────────
