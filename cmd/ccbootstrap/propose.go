@@ -1,11 +1,9 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/abdessama-cto/ccb/internal/analyzer"
@@ -59,24 +57,29 @@ func RunProposals(destDir string, fp *analyzer.ProjectFingerprint, u *llm.Projec
 		Skills: buildSkillProposals(fp, u),
 	}
 
-	reader := bufio.NewReader(os.Stdin)
-
 	printSectionHeader("🤖 AI Proposals — customised for " + u.ProjectName)
 	fmt.Printf("  %s\n\n", tui.Dim("Based on AI understanding of your codebase, Claude proposes the following setup."))
 
 	// Agents
-	confirmAgents(reader, p)
+	confirmAgents(p)
 
 	// Project-specific rules
-	confirmRules(reader, p)
+	confirmRules(p)
 
 	// Skills
-	confirmSkills(reader, p)
+	confirmSkills(p)
 
 	// Write all confirmed items to disk
 	writeProposals(destDir, p, u)
 
 	return p
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 // ─── Section builders ─────────────────────────────────────────────────────────
@@ -419,125 +422,63 @@ func buildSkillProposals(fp *analyzer.ProjectFingerprint, u *llm.ProjectUndersta
 
 // ─── UI ───────────────────────────────────────────────────────────────────────
 
-func confirmAgents(r *bufio.Reader, p *Proposals) {
+func confirmAgents(p *Proposals) {
 	if len(p.Agents) == 0 {
 		return
 	}
-	fmt.Printf("\n%s  %s\n", tui.Bold("🤖 AGENTS"), tui.Dim("— subagents in .claude/agents/"))
-	fmt.Printf("  %s\n\n", tui.Dim("Selected agents will be created as Claude Code subagents."))
-
-	for {
-		for i, a := range p.Agents {
-			check := tui.Green("[x]")
-			if !a.Selected {
-				check = tui.Dim("[ ]")
-			}
-			fmt.Printf("  %s %s%-26s %s\n", check, tui.Dim(fmt.Sprintf("%2d.", i+1)), tui.Cyan(a.Name), tui.Dim(a.Desc))
-		}
-		fmt.Printf("\n  %s ", tui.Dim("Toggle (e.g. \"3 5\") or [enter] to confirm:"))
-		input, _ := r.ReadString('\n')
-		input = strings.TrimSpace(input)
-		if input == "" {
-			break
-		}
-		for _, tok := range strings.Fields(input) {
-			if n, err := strconv.Atoi(tok); err == nil && n >= 1 && n <= len(p.Agents) {
-				p.Agents[n-1].Selected = !p.Agents[n-1].Selected
-			}
-		}
-		fmt.Println()
+	items := make([]CheckItem, len(p.Agents))
+	for i, a := range p.Agents {
+		items[i] = CheckItem{Label: a.Name, Detail: a.Desc, Selected: a.Selected}
 	}
-	count := 0
-	for _, a := range p.Agents {
-		if a.Selected {
-			count++
-		}
+	result := InteractiveCheckbox(
+		"🤖 AGENTS — subagents in .claude/agents/",
+		"Each selected agent becomes a specialised Claude Code subagent for this project.",
+		items,
+		false,
+	)
+	for i := range p.Agents {
+		p.Agents[i].Selected = result[i].Selected
 	}
-	fmt.Printf("  %s %d agents selected\n", tui.Green("✓"), count)
 }
 
-func confirmRules(r *bufio.Reader, p *Proposals) {
+func confirmRules(p *Proposals) {
 	if len(p.Rules) == 0 {
 		tui.Warn("No project-specific rules found in AI understanding (conventions empty)")
 		return
 	}
-	fmt.Printf("\n%s  %s\n", tui.Bold("📐 PROJECT RULES"), tui.Dim("— .claude/rules/05-project-specific.md"))
-	fmt.Printf("  %s\n\n", tui.Dim("AI extracted these rules from your source code. Confirm which to apply."))
-
-	for {
-		for i, rule := range p.Rules {
-			check := tui.Green("[x]")
-			if !rule.Selected {
-				check = tui.Dim("[ ]")
-			}
-			src := tui.Dim(fmt.Sprintf("[%s]", rule.Source))
-			text := rule.Rule
-			if len(text) > 72 {
-				text = text[:72] + "…"
-			}
-			fmt.Printf("  %s %s%-4s %s\n", check, src, fmt.Sprintf("%2d.", i+1), text)
-		}
-		fmt.Printf("\n  %s ", tui.Dim("Toggle (e.g. \"2 4\") or [enter] to confirm all:"))
-		input, _ := r.ReadString('\n')
-		input = strings.TrimSpace(input)
-		if input == "" {
-			break
-		}
-		for _, tok := range strings.Fields(input) {
-			if n, err := strconv.Atoi(tok); err == nil && n >= 1 && n <= len(p.Rules) {
-				p.Rules[n-1].Selected = !p.Rules[n-1].Selected
-			}
-		}
-		fmt.Println()
+	items := make([]CheckItem, len(p.Rules))
+	for i, rule := range p.Rules {
+		src := "[" + rule.Source + "]"
+		items[i] = CheckItem{Label: truncate(rule.Rule, 40), Detail: src, Selected: rule.Selected}
 	}
-	count := 0
-	for _, r := range p.Rules {
-		if r.Selected {
-			count++
-		}
+	result := InteractiveCheckbox(
+		"📐 PROJECT RULES — .claude/rules/05-project-specific.md",
+		"AI extracted these rules from your source code. Confirm which to apply.",
+		items,
+		false,
+	)
+	for i := range p.Rules {
+		p.Rules[i].Selected = result[i].Selected
 	}
-	fmt.Printf("  %s %d rules confirmed\n", tui.Green("✓"), count)
 }
 
-func confirmSkills(r *bufio.Reader, p *Proposals) {
+func confirmSkills(p *Proposals) {
 	if len(p.Skills) == 0 {
 		return
 	}
-	fmt.Printf("\n%s  %s\n", tui.Bold("🔧 SKILLS"), tui.Dim("— .claude/skills/ (Claude methodology guides)"))
-	fmt.Printf("  %s\n\n", tui.Dim("Skills teach Claude specialised methodologies for this project."))
-
-	for {
-		for i, s := range p.Skills {
-			check := tui.Green("[x]")
-			if !s.Selected {
-				check = tui.Dim("[ ]")
-			}
-			reason := ""
-			if s.Reason != "" {
-				reason = tui.Dim(" — " + s.Reason)
-			}
-			fmt.Printf("  %s %s%-36s%s\n", check, tui.Dim(fmt.Sprintf("%2d.", i+1)), tui.Cyan(s.Name), reason)
-		}
-		fmt.Printf("\n  %s ", tui.Dim("Toggle (e.g. \"6 7\") or [enter] to confirm:"))
-		input, _ := r.ReadString('\n')
-		input = strings.TrimSpace(input)
-		if input == "" {
-			break
-		}
-		for _, tok := range strings.Fields(input) {
-			if n, err := strconv.Atoi(tok); err == nil && n >= 1 && n <= len(p.Skills) {
-				p.Skills[n-1].Selected = !p.Skills[n-1].Selected
-			}
-		}
-		fmt.Println()
+	items := make([]CheckItem, len(p.Skills))
+	for i, s := range p.Skills {
+		items[i] = CheckItem{Label: s.Name, Detail: s.Reason, Selected: s.Selected}
 	}
-	count := 0
-	for _, s := range p.Skills {
-		if s.Selected {
-			count++
-		}
+	result := InteractiveCheckbox(
+		"🔧 SKILLS — .claude/skills/",
+		"Teach Claude specific methodologies for this project. Press [/] to search for more skills.",
+		items,
+		true, // searchable
+	)
+	for i := range p.Skills {
+		p.Skills[i].Selected = result[i].Selected
 	}
-	fmt.Printf("  %s %d skills selected\n\n", tui.Green("✓"), count)
 }
 
 // ─── File writer ──────────────────────────────────────────────────────────────
