@@ -15,7 +15,6 @@ import (
 	"github.com/abdessama-cto/ccb/internal/generator"
 	ghpkg "github.com/abdessama-cto/ccb/internal/github"
 	"github.com/abdessama-cto/ccb/internal/llm"
-	"github.com/abdessama-cto/ccb/internal/skills"
 	"github.com/abdessama-cto/ccb/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -245,34 +244,25 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// ── Step 6: Install skills (from proposals or fallback stack-based) ───────
-	if q.InstallSkills {
-		if proposals != nil {
-			// Log how many skills/agents were written
-			agentCount, skillCount := 0, 0
-			for _, a := range proposals.Agents {
-				if a.Selected {
-					agentCount++
-				}
-			}
-			for _, s := range proposals.Skills {
-				if s.Selected {
-					skillCount++
-				}
-			}
-			tui.Success(fmt.Sprintf("  %d agents, %d skills already written to .claude/", agentCount, skillCount))
-		} else {
-			recommendedSkills := skills.RecommendedSkills(fp.Stack)
-			tui.Info(fmt.Sprintf("Installing %d recommended skills...", len(recommendedSkills)))
-			for _, skill := range recommendedSkills {
-				tui.Info(fmt.Sprintf("  npx skills add %s", skill))
-				if err := skills.Install(destDir, skill); err != nil {
-					tui.Warn(fmt.Sprintf("  Could not install %s: %s", skill, err.Error()))
-				} else {
-					tui.Success(fmt.Sprintf("  %s installed", skill))
-				}
+	// ── Step 6: Skills summary ────────────────────────────────────────────
+	if q.InstallSkills && proposals != nil {
+		agentCount, skillCount, ruleCount := 0, 0, 0
+		for _, a := range proposals.Agents {
+			if a.Selected {
+				agentCount++
 			}
 		}
+		for _, s := range proposals.Skills {
+			if s.Selected {
+				skillCount++
+			}
+		}
+		for _, r := range proposals.Rules {
+			if r.Selected {
+				ruleCount++
+			}
+		}
+		tui.Success(fmt.Sprintf("  Agents: %d  ·  Skills: %d  ·  Rules: %d  written to .claude/", agentCount, skillCount, ruleCount))
 	}
 
 

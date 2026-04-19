@@ -60,21 +60,41 @@ func CurrentBranch(repoDir string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// CreateBranchAndPush creates a new branch, commits all changes, and pushes
+// CreateBranchAndPush creates (or reuses) a branch, commits all changes, and pushes.
+// If the branch already exists locally, it switches to it instead of re-creating it.
 func CreateBranchAndPush(repoDir, branch, commitMsg string) error {
-	cmds := [][]string{
-		{"git", "-C", repoDir, "checkout", "-b", branch},
-		{"git", "-C", repoDir, "add", "."},
-		{"git", "-C", repoDir, "commit", "-m", commitMsg},
-		{"git", "-C", repoDir, "push", "--set-upstream", "origin", branch},
-	}
-	for _, args := range cmds {
-		c := exec.Command(args[0], args[1:]...)
-		c.Stdout = os.Stdout
-		c.Stderr = os.Stderr
-		if err := c.Run(); err != nil {
-			return fmt.Errorf("command failed %v: %w", args, err)
+	// Step 1: create or switch to branch
+	checkoutNew := exec.Command("git", "-C", repoDir, "checkout", "-b", branch)
+	if out, err := checkoutNew.CombinedOutput(); err != nil {
+		// Branch already exists — try switching to it
+		checkoutExisting := exec.Command("git", "-C", repoDir, "checkout", branch)
+		if out2, err2 := checkoutExisting.CombinedOutput(); err2 != nil {
+			return fmt.Errorf("checkout branch %q: %w\n%s\n%s", branch, err2, out, out2)
 		}
+	}
+
+	// Step 2: stage all changes
+	if out, err := exec.Command("git", "-C", repoDir, "add", ".").CombinedOutput(); err != nil {
+		return fmt.Errorf("git add: %w\n%s", err, out)
+	}
+
+	// Step 3: commit (skip if nothing to commit)
+	commitCmd := exec.Command("git", "-C", repoDir, "commit", "-m", commitMsg)
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		msg := strings.ToLower(string(out))
+		if strings.Contains(msg, "nothing to commit") || strings.Contains(msg, "nothing added") {
+			// Nothing new to commit — push existing branch state
+		} else {
+			return fmt.Errorf("git commit: %w\n%s", err, out)
+		}
+	}
+
+	// Step 4: push
+	pushCmd := exec.Command("git", "-C", repoDir, "push", "--set-upstream", "origin", branch)
+	pushCmd.Stdout = os.Stdout
+	pushCmd.Stderr = os.Stderr
+	if err := pushCmd.Run(); err != nil {
+		return fmt.Errorf("git push: %w", err)
 	}
 	return nil
 }
