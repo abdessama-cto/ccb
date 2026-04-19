@@ -392,27 +392,197 @@ func boolEmoji2(v bool) string {
 }
 
 func printUnderstanding(u *llm.ProjectUnderstanding) {
-	fmt.Printf("\n%s AI Understanding\n", tui.Bold("🧠"))
-	if u.ProjectName != "" {
-		fmt.Printf("   %-16s : %s\n", "Name", tui.Cyan(u.ProjectName))
+	const width = 68
+
+	line := func(s string) string {
+		visible := visibleLen(s)
+		pad := width - 2 - visible
+		if pad < 0 {
+			pad = 0
+		}
+		return "║ " + s + strings.Repeat(" ", pad) + " ║"
 	}
-	if u.Domain != "" {
-		fmt.Printf("   %-16s : %s\n", "Domain", u.Domain)
+
+	divider := "╠" + strings.Repeat("═", width) + "╗"
+	top := "╔" + strings.Repeat("═", width) + "╗"
+	bottom := "╚" + strings.Repeat("═", width) + "╝"
+	sep := "║" + strings.Repeat("─", width) + "║"
+
+	fmt.Println()
+	fmt.Println(top)
+
+	// Title row
+	title := "  🧠  AI Project Understanding"
+	fmt.Println(line(tui.Bold(title)))
+	fmt.Println(divider)
+
+	// Project name + domain
+	name := u.ProjectName
+	if name == "" {
+		name = "Unknown project"
 	}
+	domain := u.Domain
+	if domain == "" {
+		domain = ""
+	}
+	nameStr := tui.Cyan(tui.Bold(name))
+	if domain != "" {
+		nameStr += tui.Dim("  ·  " + domain)
+	}
+	fmt.Println(line("  " + nameStr))
+	fmt.Println(sep)
+
+	// Purpose (word-wrap at width-6)
 	if u.Purpose != "" {
-		fmt.Printf("   %-16s : %s\n", "Purpose", u.Purpose)
+		fmt.Println(line(tui.Bold("  PURPOSE")))
+		for _, l := range wordWrap(u.Purpose, width-4) {
+			fmt.Println(line("  " + l))
+		}
+		fmt.Println(sep)
 	}
+
+	// Architecture
 	if u.Architecture != "" {
-		fmt.Printf("   %-16s : %s\n", "Architecture", u.Architecture)
+		fmt.Println(line(tui.Bold("  ARCHITECTURE")))
+		for _, l := range wordWrap(u.Architecture, width-4) {
+			fmt.Println(line("  " + l))
+		}
+		fmt.Println(sep)
 	}
+
+	// Key features
 	if len(u.KeyFeatures) > 0 {
-		fmt.Printf("   %-16s : %s\n", "Key features", strings.Join(u.KeyFeatures, ", "))
+		fmt.Println(line(tui.Bold("  ✦ KEY FEATURES")))
+		for _, f := range u.KeyFeatures {
+			fmt.Println(line("    " + tui.Cyan("•") + " " + f))
+		}
+		fmt.Println(sep)
 	}
+
+	// Main modules
+	if len(u.MainModules) > 0 {
+		fmt.Println(line(tui.Bold("  📁 MAIN MODULES")))
+		for _, m := range u.MainModules {
+			parts := strings.SplitN(m, ":", 2)
+			if len(parts) == 2 {
+				row := tui.Cyan(fmt.Sprintf("    %-18s", strings.TrimSpace(parts[0]))) +
+					tui.Dim(strings.TrimSpace(parts[1]))
+				fmt.Println(line(row))
+			} else {
+				fmt.Println(line("    " + m))
+			}
+		}
+		fmt.Println(sep)
+	}
+
+	// API endpoints (max 8 shown)
+	if len(u.APIEndpoints) > 0 {
+		fmt.Println(line(tui.Bold("  🌐 API ENDPOINTS")))
+		shown := u.APIEndpoints
+		if len(shown) > 8 {
+			shown = shown[:8]
+		}
+		for _, e := range shown {
+			parts := strings.SplitN(e, "—", 2)
+			if len(parts) == 2 {
+				row := tui.Green(fmt.Sprintf("    %-28s", strings.TrimSpace(parts[0]))) +
+					tui.Dim(strings.TrimSpace(parts[1]))
+				fmt.Println(line(row))
+			} else {
+				fmt.Println(line("    " + e))
+			}
+		}
+		if len(u.APIEndpoints) > 8 {
+			fmt.Println(line(tui.Dim(fmt.Sprintf("    ... +%d more endpoints", len(u.APIEndpoints)-8))))
+		}
+		fmt.Println(sep)
+	}
+
+	// External services
 	if len(u.ExternalServices) > 0 {
-		fmt.Printf("   %-16s : %s\n", "Ext. services", strings.Join(u.ExternalServices, ", "))
+		fmt.Println(line(tui.Bold("  🔌 EXTERNAL SERVICES")))
+		row := "    " + strings.Join(colorServices(u.ExternalServices), tui.Dim(" · "))
+		fmt.Println(line(row))
+		fmt.Println(sep)
 	}
+
+	// Conventions
+	if len(u.Conventions) > 0 {
+		fmt.Println(line(tui.Bold("  📐 CONVENTIONS")))
+		for _, c := range u.Conventions {
+			fmt.Println(line("    " + tui.Dim("›") + " " + c))
+		}
+		fmt.Println(sep)
+	}
+
+	// What Claude should know
+	if u.WhatClaudeKnows != "" {
+		fmt.Println(line(tui.Bold("  💡 FOR CLAUDE")))
+		for _, l := range wordWrap(u.WhatClaudeKnows, width-4) {
+			fmt.Println(line("  " + tui.Dim(l)))
+		}
+	}
+
+	fmt.Println(bottom)
 	fmt.Println()
 }
+
+// wordWrap splits a string into lines of at most maxWidth visible chars
+func wordWrap(s string, maxWidth int) []string {
+	words := strings.Fields(s)
+	var lines []string
+	current := ""
+
+	for _, w := range words {
+		if current == "" {
+			current = w
+		} else if len(current)+1+len(w) <= maxWidth {
+			current += " " + w
+		} else {
+			lines = append(lines, current)
+			current = w
+		}
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	if len(lines) == 0 {
+		return []string{s}
+	}
+	return lines
+}
+
+// visibleLen returns the visible character count (strips ANSI escape codes)
+func visibleLen(s string) int {
+	inEscape := false
+	count := 0
+	for _, r := range s {
+		if r == '\033' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+// colorServices adds cyan color to each service name
+func colorServices(services []string) []string {
+	result := make([]string, len(services))
+	for i, s := range services {
+		parts := strings.SplitN(s, ":", 2)
+		result[i] = tui.Cyan(strings.TrimSpace(parts[0]))
+	}
+	return result
+}
+
+
 
 func formatLOC(loc int) string {
 	if loc >= 1000 {
