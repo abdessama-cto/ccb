@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/abdessama-cto/ccb/internal/analyzer"
+	"github.com/abdessama-cto/ccb/internal/cache"
 	"github.com/abdessama-cto/ccb/internal/config"
 	"github.com/abdessama-cto/ccb/internal/generator"
 	ghpkg "github.com/abdessama-cto/ccb/internal/github"
@@ -129,36 +130,75 @@ func runInit(cmd *cobra.Command, args []string) error {
 	var understanding *llm.ProjectUnderstanding
 	cfg, _ := config.Load()
 	if cfg.AI.IsConfigured() {
-		tui.Info(fmt.Sprintf("Reading full codebase for AI understanding (%s / %s)...",
-			cfg.AI.Provider, cfg.AI.ActiveModel()))
-		semCtx := analyzer.ExtractSemanticContext(destDir)
-		tui.Info(fmt.Sprintf("  %d files · ~%dk tokens extracted",
-			len(semCtx.Files), semCtx.TokenEst/1000))
 
-		// Per-provider context limit: Gemini supports 1M tokens, others less
-		maxChars := 0 // no limit by default
-		switch cfg.AI.Provider {
-		case "openai":
-			maxChars = 300_000  // ~75k tokens (safe for gpt-4o)
-		case "ollama":
-			maxChars = 100_000  // ~25k tokens (safe for llama3.2 128k)
-		// gemini: 0 = no limit (~4M chars fits in 1M token window)
+		// ── Cache check ──────────────────────────────────────────────────
+		useCache := false
+		if cached, loadErr := cache.Load(destDir); loadErr == nil && cached != nil {
+			tui.Info(fmt.Sprintf("\n  📦 Cached analysis found: %s", cached.Summary()))
+			if !initFlags.yes {
+				answer := askLine("  Reuse it? [Y/n/r = re-analyze]: ", "y")
+				answer = strings.ToLower(strings.TrimSpace(answer))
+				if answer == "" || answer == "y" || answer == "yes" {
+					useCache = true
+				}
+			} else {
+				useCache = true // --yes mode: always use cache
+			}
+			if useCache {
+				understanding = cached.Understanding
+				fp = cached.Fingerprint
+				tui.Success("  Using cached analysis ✓")
+				printUnderstanding(understanding)
+			}
 		}
 
-		prompt := analyzer.BuildAIPromptLimited(semCtx, fp, maxChars)
-		tui.Info(fmt.Sprintf("  Sending %dk chars to %s...", len(prompt)/1000, cfg.AI.ActiveModel()))
+		// ── Fresh analysis ────────────────────────────────────────────────
+		if !useCache {
+			tui.Info(fmt.Sprintf("Reading full codebase for AI understanding (%s / %s)...",
+				cfg.AI.Provider, cfg.AI.ActiveModel()))
+			semCtx := analyzer.ExtractSemanticContext(destDir)
+			tui.Info(fmt.Sprintf("  %d files · ~%dk tokens extracted",
+				len(semCtx.Files), semCtx.TokenEst/1000))
 
-		understanding, err = llm.UnderstandProject(llm.Config{
-			Provider:        llm.Provider(cfg.AI.Provider),
-			Model:           cfg.AI.ActiveModel(),
-			APIKey:          cfg.AI.ActiveKey(),
-			OllamaURL:       cfg.AI.OllamaURL,
-			MaxContextChars: maxChars,
-		}, prompt)
-		if err != nil {
-			tui.Warn(fmt.Sprintf("AI understanding failed: %s — continuing with static analysis", err.Error()))
-		} else {
-			printUnderstanding(understanding)
+			// Per-provider context limit: Gemini supports 1M tokens, others less
+			maxChars := 0 // no limit by default
+			switch cfg.AI.Provider {
+			case "openai":
+				maxChars = 300_000  // ~75k tokens (safe for gpt-4o)
+			case "ollama":
+				maxChars = 100_000  // ~25k tokens (safe for llama3.2 128k)
+			// gemini: 0 = no limit (~4M chars fits in 1M token window)
+			}
+
+			prompt := analyzer.BuildAIPromptLimited(semCtx, fp, maxChars)
+			tui.Info(fmt.Sprintf("  Sending %dk chars to %s...", len(prompt)/1000, cfg.AI.ActiveModel()))
+
+			understanding, err = llm.UnderstandProject(llm.Config{
+				Provider:        llm.Provider(cfg.AI.Provider),
+				Model:           cfg.AI.ActiveModel(),
+				APIKey:          cfg.AI.ActiveKey(),
+				OllamaURL:       cfg.AI.OllamaURL,
+				MaxContextChars: maxChars,
+			}, prompt)
+			if err != nil {
+				tui.Warn(fmt.Sprintf("AI understanding failed: %s — continuing with static analysis", err.Error()))
+			} else {
+				printUnderstanding(understanding)
+				// ── Persist to cache ──────────────────────────────────────
+				if saveErr := cache.Save(
+					destDir,
+					cfg.AI.Provider,
+					cfg.AI.ActiveModel(),
+					len(semCtx.Files),
+					semCtx.TokenEst,
+					fp,
+					understanding,
+				); saveErr != nil {
+					tui.Warn(fmt.Sprintf("Could not cache analysis: %s", saveErr.Error()))
+				} else {
+					tui.Success(fmt.Sprintf("  Analysis cached to %s", cache.CachePath(destDir)))
+				}
+			}
 		}
 	} else {
 		tui.Warn("No AI provider configured — skipping AI understanding. Run: ccbootstrap settings")
@@ -480,6 +520,19 @@ func confirmQ(r *bufio.Reader, prompt string, defaultVal bool) bool {
 		return defaultVal
 	}
 	return input == "y" || input == "yes"
+}
+
+// askLine prints a prompt and reads one line from stdin.
+// If the user just presses Enter, defaultVal is returned.
+func askLine(prompt, defaultVal string) string {
+	fmt.Print(prompt)
+	r := bufio.NewReader(os.Stdin)
+	line, _ := r.ReadString('\n')
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return defaultVal
+	}
+	return line
 }
 
 
