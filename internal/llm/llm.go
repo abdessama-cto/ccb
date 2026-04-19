@@ -268,18 +268,34 @@ func min(a, b int) int {
 // ─── Model lists (for UI) ─────────────────────────────────────────────────────
 
 var OpenAIModels = []string{
-	"gpt-4o-mini",
+	// GPT-5 series
+	"gpt-5.4",          // Main — best overall
+	"gpt-5.4-mini",     // Fast
+	"gpt-5.4-nano",     // Cheap
+	"gpt-5.4-pro",      // Deep reasoning
+	"gpt-5.3-codex",    // Coding specialized
+	// GPT-4o series (stable)
 	"gpt-4o",
+	"gpt-4o-mini",
+	// o1 reasoning
 	"o1-mini",
 	"o1",
 }
 
 var GeminiModels = []string{
+	// Gemini 3 previews (latest)
+	"gemini-3.1-pro-preview",        // Main — multimodal native
+	"gemini-3-flash-preview",        // Fast
+	"gemini-3.1-flash-lite-preview", // Cheap
+	// Gemini 2.5 stable
+	"gemini-2.5-pro",                // Stable, deep reasoning
+	"gemini-2.5-flash",              // Stable, fast
+	// Alias
+	"gemini-pro-latest",             // Auto hot-swap latest
+	// Gemini 2.0
 	"gemini-2.0-flash",
 	"gemini-2.0-flash-lite",
-	"gemini-1.5-pro",
-	"gemini-1.5-flash",
-	"gemini-2.5-pro-preview-03-25",
+	"gemini-1.5-pro",                // Long context (1M tokens)
 }
 
 var OllamaModels = []string{
@@ -294,3 +310,4 @@ var OllamaModels = []string{
 	"gemma3",
 	"mixtral",
 }
+

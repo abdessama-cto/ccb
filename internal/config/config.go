@@ -97,8 +97,8 @@ func Default() *Config {
 		AI: AIConfig{
 			Enabled:          true,
 			Provider:         "openai",
-			OpenAIModel:      "gpt-4o-mini",
-			GeminiModel:      "gemini-2.0-flash",
+			OpenAIModel:      "gpt-5.4-mini",     // Fast + capable default
+			GeminiModel:      "gemini-2.5-flash", // Stable fast default
 			OllamaURL:        "http://localhost:11434",
 			OllamaModel:      "llama3.2",
 			MonthlyBudgetUSD: 5.0,
