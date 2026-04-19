@@ -1,11 +1,15 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/abdessama-cto/ccb/internal/tui"
 	"github.com/spf13/cobra"
@@ -24,30 +28,11 @@ func init() {
 func runUpdate(cmd *cobra.Command, args []string) error {
 	tui.Info("Checking for updates...")
 
-	// Determine binary arch suffix
-	arch := "darwin-arm64"
-	if runtime.GOARCH == "amd64" {
-		arch = "darwin-amd64"
-	}
+	arch := fmt.Sprintf("%s-%s", runtime.GOOS, hostArch())
 
-	// Fetch latest version from GitHub API
-	out, err := exec.Command("curl", "-fsSL",
-		"https://api.github.com/repos/abdessama-cto/ccb/releases/latest",
-	).Output()
+	latestVersion, err := fetchLatestVersion()
 	if err != nil {
-		return fmt.Errorf("could not reach GitHub API: %w", err)
-	}
-
-	// Parse tag_name with jq if available
-	var latestVersion string
-	jqCmd := exec.Command("jq", "-r", ".tag_name")
-	jqOut, jqErr := execInput(jqCmd, out)
-	if jqErr == nil {
-		latestVersion = strings.TrimSpace(string(jqOut))
-	}
-
-	if latestVersion == "" || latestVersion == "null" {
-		return fmt.Errorf("could not determine latest version from GitHub API")
+		return err
 	}
 
 	if latestVersion == "v"+Version {
@@ -57,16 +42,12 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	tui.Info(fmt.Sprintf("New version available: %s → %s", Version, latestVersion))
 
-	// Download new binary
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("could not determine current binary path: %w", err)
 	}
 
-	baseURL := fmt.Sprintf(
-		"https://github.com/abdessama-cto/ccb/releases/download/%s",
-		latestVersion,
-	)
+	baseURL := fmt.Sprintf("https://github.com/abdessama-cto/ccb/releases/download/%s", latestVersion)
 	candidates := []string{
 		fmt.Sprintf("%s/ccb-%s", baseURL, arch),
 		fmt.Sprintf("%s/ccbootstrap-%s", baseURL, arch),
@@ -74,11 +55,10 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	tmpPath := exe + ".new"
 
 	tui.Info(fmt.Sprintf("Downloading %s...", latestVersion))
-	var downloaded bool
 	var lastErr error
+	var downloaded bool
 	for _, url := range candidates {
-		dlCmd := exec.Command("curl", "-fsSL", "-o", tmpPath, url)
-		if err := dlCmd.Run(); err != nil {
+		if err := downloadToFile(url, tmpPath); err != nil {
 			lastErr = err
 			_ = os.Remove(tmpPath)
 			continue
@@ -87,7 +67,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		break
 	}
 	if !downloaded {
-		return fmt.Errorf("download failed (tried %d URLs): %w", len(candidates), lastErr)
+		return fmt.Errorf("download failed: %w", lastErr)
 	}
 
 	if err := os.Chmod(tmpPath, 0755); err != nil {
@@ -95,7 +75,6 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("chmod failed: %w", err)
 	}
 
-	// Atomic replace
 	if err := os.Rename(tmpPath, exe); err != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("could not replace binary: %w", err)
@@ -105,15 +84,62 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// exec.Command.Input is not stdlib — add helper
-func execInput(cmd *exec.Cmd, input []byte) ([]byte, error) {
-	stdin, err := cmd.StdinPipe()
+func fetchLatestVersion() (string, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	req, _ := http.NewRequest("GET", "https://api.github.com/repos/abdessama-cto/ccb/releases/latest", nil)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return "", fmt.Errorf("could not reach GitHub API: %w", err)
 	}
-	go func() {
-		defer stdin.Close()
-		stdin.Write(input)
-	}()
-	return cmd.Output()
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
+	}
+	var body struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", fmt.Errorf("could not parse GitHub API response: %w", err)
+	}
+	if body.TagName == "" {
+		return "", fmt.Errorf("could not determine latest version from GitHub API")
+	}
+	return body.TagName, nil
+}
+
+// hostArch returns the real CPU arch, not the Go toolchain's arch.
+// On macOS, a Go binary built for amd64 running under Rosetta on Apple
+// Silicon reports runtime.GOARCH == "amd64", but the host is arm64.
+// sysctl.proc_translated == 1 means we're running under Rosetta, so
+// the real hardware is arm64.
+func hostArch() string {
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "amd64" {
+		out, err := exec.Command("sysctl", "-n", "sysctl.proc_translated").Output()
+		if err == nil && strings.TrimSpace(string(out)) == "1" {
+			return "arm64"
+		}
+	}
+	return runtime.GOARCH
+}
+
+func downloadToFile(url, dest string) error {
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("status %d from %s", resp.StatusCode, url)
+	}
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		return err
+	}
+	return nil
 }
