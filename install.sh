@@ -255,21 +255,36 @@ is_already_installed() {
 
 # ─── Step 6: download, verify, install ───────────────────────────────────────
 download_and_install() {
-  TMPDIR_LOCAL=$(mktemp -d -t ccbootstrap-install-XXXXXX)
+  TMPDIR_LOCAL=$(mktemp -d -t ccb-install-XXXXXX)
 
   local base_url="https://github.com/${GITHUB_REPO}/releases/download/${RESOLVED_VERSION}"
-  local binary_url="${base_url}/${BINARY_NAME}-darwin-arm64"
-  local sha_url="${binary_url}.sha256"
   local tmp_bin="${TMPDIR_LOCAL}/${BINARY_NAME}"
   local tmp_sha="${TMPDIR_LOCAL}/${BINARY_NAME}.sha256"
 
+  # Asset name changed from ccbootstrap-* → ccb-* starting mid-April 2026.
+  # Try the new name first, fall back to the legacy name so older releases still work.
+  local candidates=(
+    "${base_url}/${BINARY_NAME}-darwin-arm64"
+    "${base_url}/${LEGACY_BINARY_NAME}-darwin-arm64"
+  )
+
   info "Downloading binary (arm64-darwin)..."
-  if ! curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 \
-         -o "$tmp_bin" "$binary_url"; then
+  local binary_url=""
+  for url in "${candidates[@]}"; do
+    if curl -fsSL --retry 2 --retry-delay 1 --connect-timeout 15 \
+         -o "$tmp_bin" "$url" 2>/dev/null; then
+      binary_url="$url"
+      break
+    fi
+  done
+  if [[ -z "$binary_url" ]]; then
     fatal "Failed to download binary.
-  URL: $binary_url
+  Tried:
+    ${candidates[0]}
+    ${candidates[1]}
   Check https://github.com/${GITHUB_REPO}/releases"
   fi
+  local sha_url="${binary_url}.sha256"
 
   local size_mb
   size_mb=$(du -m "$tmp_bin" | awk '{print $1}')
