@@ -37,9 +37,18 @@ func Generate(
 	q *Questionnaire,
 	understanding *llm.ProjectUnderstanding,
 	llmFiles []llm.GeneratedFile,
+	version string,
+	backupFrom string,
 ) error {
 	if err := ensureDirs(targetDir); err != nil {
 		return err
+	}
+
+	created := []string{}
+	track := func(abs string) {
+		if rel, err := filepath.Rel(targetDir, abs); err == nil {
+			created = append(created, rel)
+		}
 	}
 
 	// Deterministic structural files — always written.
@@ -81,6 +90,9 @@ func Generate(
 		if err := writeWithProgress(targetDir, llmFiles); err != nil {
 			return err
 		}
+		for _, f := range llmFiles {
+			track(filepath.Join(targetDir, f.Path))
+		}
 	}
 
 	// ── Write deterministic files ─────────────────────────────────────────────
@@ -94,6 +106,7 @@ func Generate(
 		if err := writeFile(p, deterministic[p]); err != nil {
 			return fmt.Errorf("write %s: %w", p, err)
 		}
+		track(p)
 		rel, _ := filepath.Rel(targetDir, p)
 		fmt.Printf("  %s %s\n", tui.Green("✓"), tui.Dim(rel))
 	}
@@ -102,6 +115,19 @@ func Generate(
 	archPath := filepath.Join(targetDir, "docs", "architecture.md")
 	if _, err := os.Stat(archPath); os.IsNotExist(err) {
 		_ = writeFile(archPath, generateArchitectureStub(fp, understanding))
+		track(archPath)
+	}
+
+	// ── Write manifest for ccb uninstall ──────────────────────────────────────
+	manifest := Manifest{
+		CreatedAt:  time.Now(),
+		Version:    version,
+		Files:      created,
+		Dirs:       ccbDirs(),
+		BackupFrom: backupFrom,
+	}
+	if err := WriteManifest(targetDir, manifest); err != nil {
+		tui.Warn(fmt.Sprintf("Could not write manifest: %s", err.Error()))
 	}
 
 	// Make hooks executable
@@ -114,20 +140,28 @@ func Generate(
 	return nil
 }
 
-func ensureDirs(targetDir string) error {
-	dirs := []string{
-		filepath.Join(targetDir, ".claude", "rules"),
-		filepath.Join(targetDir, ".claude", "hooks"),
-		filepath.Join(targetDir, ".claude", "commands"),
-		filepath.Join(targetDir, ".claude", "agents"),
-		filepath.Join(targetDir, ".claude", "skills"),
-		filepath.Join(targetDir, "docs", "decisions"),
-		filepath.Join(targetDir, "docs", "solutions"),
-		filepath.Join(targetDir, "docs", "brainstorms"),
+// ccbDirs returns the project-relative directories ccb creates during init.
+// They are tracked in the manifest so `ccb uninstall` can remove empty ones.
+func ccbDirs() []string {
+	return []string{
+		".claude/rules",
+		".claude/hooks",
+		".claude/commands",
+		".claude/agents",
+		".claude/skills",
+		".claude",
+		"docs/decisions",
+		"docs/solutions",
+		"docs/brainstorms",
+		"docs",
 	}
-	for _, d := range dirs {
-		if err := os.MkdirAll(d, 0755); err != nil {
-			return fmt.Errorf("mkdir %s: %w", d, err)
+}
+
+func ensureDirs(targetDir string) error {
+	for _, rel := range ccbDirs() {
+		full := filepath.Join(targetDir, rel)
+		if err := os.MkdirAll(full, 0755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", full, err)
 		}
 	}
 	return nil

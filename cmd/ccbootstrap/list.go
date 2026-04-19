@@ -73,10 +73,11 @@ func runList(cmd *cobra.Command, args []string) error {
 		for _, f := range files {
 			name := strings.TrimSuffix(f, sec.suffix)
 			desc := extractFrontmatterDesc(filepath.Join(sec.dir, f))
+			fmt.Printf("    %s\n", tui.Cyan(name))
 			if desc != "" {
-				fmt.Printf("    %s  %s\n", tui.Cyan(name), tui.Dim(truncate(desc, 60)))
-			} else {
-				fmt.Printf("    %s\n", tui.Cyan(name))
+				for _, w := range wordWrap(desc, 70) {
+					fmt.Printf("      %s\n", tui.Dim(w))
+				}
 			}
 			total++
 		}

@@ -15,9 +15,10 @@
 set -euo pipefail
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-readonly INSTALLER_VERSION="3.0.0"
+readonly INSTALLER_VERSION="3.1.0"
 readonly GITHUB_REPO="abdessama-cto/ccb"
-readonly BINARY_NAME="ccbootstrap"
+readonly BINARY_NAME="ccb"
+readonly LEGACY_BINARY_NAME="ccbootstrap"
 readonly BIN_DIR="${CCBOOTSTRAP_PREFIX:-${HOME}/.local/bin}"
 readonly CONFIG_DIR="${HOME}/.ccbootstrap"
 readonly TARGET_VERSION="${CCBOOTSTRAP_VERSION:-latest}"
@@ -60,7 +61,7 @@ trap 'fatal "Aborted by user"' INT TERM
 print_banner() {
   cat <<EOF
 
-   ${C_GREEN}🌱 ccbootstrap${C_RESET} ${C_DIM}— Claude Code Project Bootstrapper${C_RESET}
+   ${C_GREEN}🌱 ccb${C_RESET} ${C_DIM}— Claude Code Bootstrapper${C_RESET}
    ${C_DIM}installer v${INSTALLER_VERSION} · macOS Apple Silicon · $(date +%Y-%m-%d)${C_RESET}
 
 EOF
@@ -71,16 +72,14 @@ check_platform() {
   info "Checking platform..."
 
   if [[ "$(uname -s)" != "Darwin" ]]; then
-    fatal "ccbootstrap v3 requires macOS (detected: $(uname -s)).
-  Linux/Windows support is on the v1.5 roadmap.
-  See https://ccbootstrap.dev/other-platforms"
+    fatal "ccb requires macOS (detected: $(uname -s)).
+  Linux/Windows support is on the roadmap."
   fi
 
   if [[ "$(uname -m)" != "arm64" ]]; then
-    fatal "ccbootstrap v3 requires Apple Silicon (M1/M2/M3/M4).
+    fatal "ccb requires Apple Silicon (M1/M2/M3/M4).
   Detected architecture: $(uname -m)
-  Intel Mac support is on the v1.5 roadmap.
-  See https://ccbootstrap.dev/other-platforms"
+  Intel Mac support is on the roadmap."
   fi
 
   local macos_major
@@ -246,7 +245,7 @@ is_already_installed() {
   local have="${current#v}"
 
   if [[ "$target" == "$have" ]]; then
-    success "ccbootstrap ${current} already installed and up to date"
+    success "ccb ${current} already installed and up to date"
     return 0
   fi
 
@@ -313,6 +312,12 @@ download_and_install() {
   mkdir -p "$BIN_DIR"
   install -m 0755 "$tmp_bin" "${BIN_DIR}/${BINARY_NAME}"
   success "Installed to ${C_BOLD}${BIN_DIR}/${BINARY_NAME}${C_RESET}"
+
+  # Remove legacy binary if still present
+  if [[ -f "${BIN_DIR}/${LEGACY_BINARY_NAME}" ]]; then
+    rm -f "${BIN_DIR}/${LEGACY_BINARY_NAME}"
+    success "Removed legacy binary ${BIN_DIR}/${LEGACY_BINARY_NAME}"
+  fi
 }
 
 # ─── Step 7: PATH setup ──────────────────────────────────────────────────────
@@ -417,25 +422,23 @@ verify_install() {
 print_next_steps() {
   cat <<EOF
 
-${C_GREEN}${C_BOLD}🎉 ccbootstrap ${RESOLVED_VERSION} installed${C_RESET}
+${C_GREEN}${C_BOLD}🎉 ccb ${RESOLVED_VERSION} installed${C_RESET}
 
 ${C_BOLD}Next steps${C_RESET}
 
-  ${C_DIM}# 1. Reload your shell (or open a new terminal)${C_RESET}
-  source ~/.zshrc
+  ${C_DIM}# 1. Reload your shell cache (or open a new terminal)${C_RESET}
+  hash -r
 
-  ${C_DIM}# 2. Configure credentials (OpenAI, GitHub auth)${C_RESET}
-  ccbootstrap settings
+  ${C_DIM}# 2. Guided onboarding (configure AI, then bootstrap)${C_RESET}
+  ccb start
 
-  ${C_DIM}# 3. Bootstrap your first repo — pick one:${C_RESET}
+  ${C_DIM}# 3. After install you can:${C_RESET}
+  ccb add skill              ${C_DIM}# add a skill from skills.sh${C_RESET}
+  ccb add agent              ${C_DIM}# generate an agent tailored to the project${C_RESET}
+  ccb list                   ${C_DIM}# show what's installed${C_RESET}
+  ccb doctor                 ${C_DIM}# audit the setup${C_RESET}
+  ccb uninstall              ${C_DIM}# remove everything${C_RESET}
 
-  ${C_DIM}# Option A — Clone from GitHub:${C_RESET}
-  ccbootstrap init https://github.com/<owner>/<repo>
-
-  ${C_DIM}# Option B — Use your current local directory (already cloned):${C_RESET}
-  cd /path/to/your-project && ccbootstrap init
-
-${C_BOLD}Docs${C_RESET}   https://ccbootstrap.dev/docs
 ${C_BOLD}Repo${C_RESET}   https://github.com/${GITHUB_REPO}
 ${C_BOLD}Issues${C_RESET} https://github.com/${GITHUB_REPO}/issues
 

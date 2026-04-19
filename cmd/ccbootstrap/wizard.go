@@ -204,9 +204,15 @@ func (m wizardModel) View() string {
 	sb.WriteString("\n")
 
 	if strings.TrimSpace(q.Subtitle) != "" {
-		sb.WriteString("  ")
-		sb.WriteString(wizStyleSub.Render(q.Subtitle))
-		sb.WriteString("\n")
+		maxw := m.width - 4
+		if maxw < 40 {
+			maxw = 40
+		}
+		for _, ln := range wordWrap(q.Subtitle, maxw) {
+			sb.WriteString("  ")
+			sb.WriteString(wizStyleSub.Render(ln))
+			sb.WriteString("\n")
+		}
 	}
 
 	sb.WriteString("\n")

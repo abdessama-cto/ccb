@@ -152,7 +152,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Build hook questionnaire from profile
 	q := hookSettingsForProfile(initFlags.profile, fp)
 
-	if err := generator.Generate(destDir, fp, q, understanding, genResult.Files); err != nil {
+	// Back up any existing .claude/ so we never overwrite user work.
+	backupDir, err := backupExistingClaudeDir(destDir)
+	if err != nil {
+		return fmt.Errorf("could not back up existing .claude/: %w", err)
+	}
+
+	if err := generator.Generate(destDir, fp, q, understanding, genResult.Files, Version, backupDir); err != nil {
 		return fmt.Errorf("generation failed: %w", err)
 	}
 
@@ -350,6 +356,45 @@ func hookSettingsForProfile(profile string, fp *analyzer.ProjectFingerprint) *ge
 	return q
 }
 
+// backupExistingClaudeDir moves any pre-existing .claude/ directory to
+// .claude-backup-<timestamp>/ so we never overwrite the user's prior config.
+// Returns the backup path (empty string if nothing was moved).
+func backupExistingClaudeDir(projectDir string) (string, error) {
+	src := filepath.Join(projectDir, ".claude")
+	info, err := os.Stat(src)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", nil
+	}
+	// Skip empty dirs — nothing worth preserving.
+	entries, _ := os.ReadDir(src)
+	if len(entries) == 0 {
+		return "", nil
+	}
+
+	stamp := time.Now().Format("20060102-150405")
+	dst := filepath.Join(projectDir, ".claude-backup-"+stamp)
+	// Handle the unlikely collision by appending an index.
+	for i := 1; ; i++ {
+		if _, err := os.Stat(dst); os.IsNotExist(err) {
+			break
+		}
+		dst = filepath.Join(projectDir, fmt.Sprintf(".claude-backup-%s-%d", stamp, i))
+	}
+
+	if err := os.Rename(src, dst); err != nil {
+		return "", fmt.Errorf("rename %s → %s: %w", src, dst, err)
+	}
+	rel, _ := filepath.Rel(projectDir, dst)
+	tui.Warn(fmt.Sprintf("Existing .claude/ backed up to %s", rel))
+	return dst, nil
+}
+
 // askLine prints a prompt and reads one line from stdin. Enter = default.
 func askLine(prompt, defaultVal string) string {
 	fmt.Print(prompt)
@@ -432,10 +477,21 @@ func printUnderstanding(u *llm.ProjectUnderstanding) {
 		}
 		fmt.Println(sep)
 	}
+	// Inner text budget (visible chars) once padding/prefix consumed.
+	// width=68, outer margins "║ ... ║" use 4 chars, item indent uses 4-6 chars
+	innerWidth := width - 6
+
 	if len(u.KeyFeatures) > 0 {
 		fmt.Println(line(tui.Bold("  ✦ KEY FEATURES")))
 		for _, f := range u.KeyFeatures {
-			fmt.Println(line("    " + tui.Cyan("•") + " " + f))
+			wrapped := wordWrap(f, innerWidth-2)
+			for i, w := range wrapped {
+				if i == 0 {
+					fmt.Println(line("    " + tui.Cyan("•") + " " + w))
+				} else {
+					fmt.Println(line("      " + w))
+				}
+			}
 		}
 		fmt.Println(sep)
 	}
@@ -444,11 +500,24 @@ func printUnderstanding(u *llm.ProjectUnderstanding) {
 		for _, m := range u.MainModules {
 			parts := strings.SplitN(m, ":", 2)
 			if len(parts) == 2 {
-				row := tui.Cyan(fmt.Sprintf("    %-18s", strings.TrimSpace(parts[0]))) +
-					tui.Dim(strings.TrimSpace(parts[1]))
-				fmt.Println(line(row))
+				key := strings.TrimSpace(parts[0])
+				val := strings.TrimSpace(parts[1])
+				wrapped := wordWrap(val, innerWidth-20)
+				for i, w := range wrapped {
+					if i == 0 {
+						fmt.Println(line(tui.Cyan(fmt.Sprintf("    %-18s", key)) + tui.Dim(w)))
+					} else {
+						fmt.Println(line(strings.Repeat(" ", 22) + tui.Dim(w)))
+					}
+				}
 			} else {
-				fmt.Println(line("    " + m))
+				for i, w := range wordWrap(m, innerWidth-2) {
+					if i == 0 {
+						fmt.Println(line("    " + w))
+					} else {
+						fmt.Println(line("    " + w))
+					}
+				}
 			}
 		}
 		fmt.Println(sep)
@@ -462,11 +531,24 @@ func printUnderstanding(u *llm.ProjectUnderstanding) {
 		for _, e := range shown {
 			parts := strings.SplitN(e, "—", 2)
 			if len(parts) == 2 {
-				row := tui.Green(fmt.Sprintf("    %-28s", strings.TrimSpace(parts[0]))) +
-					tui.Dim(strings.TrimSpace(parts[1]))
-				fmt.Println(line(row))
+				route := strings.TrimSpace(parts[0])
+				desc := strings.TrimSpace(parts[1])
+				routeWrapped := wordWrap(route, innerWidth-2)
+				for i, w := range routeWrapped {
+					if i == 0 {
+						prefix := fmt.Sprintf("    %-28s", w)
+						fmt.Println(line(tui.Green(prefix) + tui.Dim("")))
+					} else {
+						fmt.Println(line("    " + tui.Green(w)))
+					}
+				}
+				for _, w := range wordWrap(desc, innerWidth-6) {
+					fmt.Println(line("      " + tui.Dim(w)))
+				}
 			} else {
-				fmt.Println(line("    " + e))
+				for _, w := range wordWrap(e, innerWidth-2) {
+					fmt.Println(line("    " + w))
+				}
 			}
 		}
 		if len(u.APIEndpoints) > 8 {
@@ -476,14 +558,27 @@ func printUnderstanding(u *llm.ProjectUnderstanding) {
 	}
 	if len(u.ExternalServices) > 0 {
 		fmt.Println(line(tui.Bold("  🔌 EXTERNAL SERVICES")))
-		row := "    " + strings.Join(colorServices(u.ExternalServices), tui.Dim(" · "))
-		fmt.Println(line(row))
+		for _, svc := range u.ExternalServices {
+			for i, w := range wordWrap(svc, innerWidth-4) {
+				if i == 0 {
+					fmt.Println(line("    " + tui.Cyan("·") + " " + w))
+				} else {
+					fmt.Println(line("      " + w))
+				}
+			}
+		}
 		fmt.Println(sep)
 	}
 	if len(u.Conventions) > 0 {
 		fmt.Println(line(tui.Bold("  📐 CONVENTIONS")))
 		for _, c := range u.Conventions {
-			fmt.Println(line("    " + tui.Dim("›") + " " + c))
+			for i, w := range wordWrap(c, innerWidth-4) {
+				if i == 0 {
+					fmt.Println(line("    " + tui.Dim("›") + " " + w))
+				} else {
+					fmt.Println(line("      " + tui.Dim(w)))
+				}
+			}
 		}
 		fmt.Println(sep)
 	}
@@ -538,15 +633,6 @@ func visibleLen(s string) int {
 		count++
 	}
 	return count
-}
-
-func colorServices(services []string) []string {
-	result := make([]string, len(services))
-	for i, s := range services {
-		parts := strings.SplitN(s, ":", 2)
-		result[i] = tui.Cyan(strings.TrimSpace(parts[0]))
-	}
-	return result
 }
 
 func formatLOC(loc int) string {
