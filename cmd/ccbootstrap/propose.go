@@ -76,10 +76,8 @@ func confirmRules(p *llm.Proposals) {
 }
 
 func confirmSkills(p *llm.Proposals) {
-	if len(p.Skills) == 0 {
-		tui.Warn("No skills proposed by the AI — skipping")
-		return
-	}
+	// Render the checkbox even if AI proposed zero skills — the user can still
+	// add skills from skills.sh via "/" search.
 	items := make([]CheckItem, len(p.Skills))
 	for i, s := range p.Skills {
 		detail := s.Description
@@ -90,12 +88,34 @@ func confirmSkills(p *llm.Proposals) {
 	}
 	result := InteractiveCheckbox(
 		"🔧 SKILLS — .claude/skills/",
-		"Skills teach Claude specific methodologies. Press [/] to search 100+ skills from disk.",
+		"Skills teach Claude specific methodologies. Press [/] to search skills.sh.",
 		items,
 		true,
 	)
+
+	// Update existing proposals
 	for i := range p.Skills {
-		p.Skills[i].Selected = result[i].Selected
+		if i < len(result) {
+			p.Skills[i].Selected = result[i].Selected
+		}
+	}
+	// Append newly-added skills from the skills.sh search
+	for i := len(p.Skills); i < len(result); i++ {
+		it := result[i]
+		if it.SkillRef == nil {
+			continue
+		}
+		ref := it.SkillRef
+		p.Skills = append(p.Skills, llm.SkillProposal{
+			ID:             "skillssh-" + ref.SkillID,
+			Filename:       ref.SkillID + ".md",
+			Name:           ref.SkillID,
+			Description:    ref.Name,
+			Reason:         "Added from skills.sh (" + ref.Source + ")",
+			Selected:       it.Selected,
+			ExternalID:     ref.ID,
+			ExternalSource: ref.Source,
+		})
 	}
 }
 

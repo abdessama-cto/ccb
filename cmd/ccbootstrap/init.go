@@ -54,10 +54,6 @@ func runInit(cmd *cobra.Command, args []string) error {
 	startTime := time.Now()
 	tui.Banner(Version)
 
-	// Pre-warm the skills cache in the background so the search UI is instant
-	// when the user reaches the skills selection step.
-	go func() { _, _ = skills.EnsureRepo() }()
-
 	// ── Step 1: Determine mode (local / clone) ───────────────────────────────
 	destDir, repoURL, err := resolveDestination(args)
 	if err != nil {
@@ -118,14 +114,40 @@ func runInit(cmd *cobra.Command, args []string) error {
 	selectedRules := SelectedRules(proposals)
 	selectedSkills := SelectedSkills(proposals)
 
+	// Split skills into LLM-generated vs external (skills.sh fetched)
+	var llmSkills, extSkills []llm.SkillProposal
+	for _, s := range selectedSkills {
+		if s.ExternalID != "" {
+			extSkills = append(extSkills, s)
+		} else {
+			llmSkills = append(llmSkills, s)
+		}
+	}
+
 	// ── Step 6: Generate files — single LLM call with progress ───────────────
 	tui.Info("Generating Claude Code configuration (single LLM call)...")
 	genResult, err := llm.GenerateFiles(llmCfg, understanding, fp, answers,
-		selectedAgents, selectedRules, selectedSkills)
+		selectedAgents, selectedRules, llmSkills)
 	if err != nil {
 		return fmt.Errorf("file generation failed: %w", err)
 	}
-	tui.Success(fmt.Sprintf("AI returned %d files — writing to disk", len(genResult.Files)))
+	tui.Success(fmt.Sprintf("AI returned %d files", len(genResult.Files)))
+
+	// Fetch external skills (skills.sh) directly from GitHub raw.
+	if len(extSkills) > 0 {
+		tui.Info(fmt.Sprintf("Fetching %d skill(s) from skills.sh...", len(extSkills)))
+		for _, s := range extSkills {
+			ref := skills.Skill{ID: s.ExternalID, Source: s.ExternalSource, SkillID: s.Name}
+			if err := skills.FetchContent(&ref); err != nil {
+				tui.Warn(fmt.Sprintf("  %s: %s — skipping", s.Name, err.Error()))
+				continue
+			}
+			genResult.Files = append(genResult.Files, llm.GeneratedFile{
+				Path:    ".claude/skills/" + s.Filename,
+				Content: ref.Content,
+			})
+		}
+	}
 
 	// Build hook questionnaire from profile
 	q := hookSettingsForProfile(initFlags.profile, fp)

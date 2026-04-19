@@ -2,9 +2,7 @@ package cmd
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
+	"time"
 
 	"github.com/abdessama-cto/ccb/internal/skills"
 	"github.com/abdessama-cto/ccb/internal/tui"
@@ -13,12 +11,10 @@ import (
 
 var syncCmd = &cobra.Command{
 	Use:   "sync",
-	Short: "Pull the latest awesome-claude-skills catalog",
-	Long: `Force-refresh the local clone of ComposioHQ/awesome-claude-skills
-stored at ~/.ccbootstrap/skills-cache/.
-
-ccb normally auto-pulls if the cache is older than 24h. Use 'ccb sync' to
-force an immediate refresh.`,
+	Short: "Ping skills.sh to verify the catalog is reachable",
+	Long: `Skills are now pulled on demand from https://skills.sh — there is no
+local cache to refresh. This command simply verifies the API is reachable
+and prints a sample response to confirm the connection works.`,
 	RunE: runSync,
 }
 
@@ -27,25 +23,17 @@ func init() {
 }
 
 func runSync(cmd *cobra.Command, args []string) error {
-	dir := skills.CacheDir()
-
-	// If not cloned yet, clone now.
-	if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
-		tui.Info("Skills cache not found — cloning...")
-		if _, err := skills.EnsureRepo(); err != nil {
-			return err
-		}
-	} else {
-		tui.Info("Pulling latest awesome-claude-skills...")
-		pull := exec.Command("git", "-C", dir, "pull", "--ff-only")
-		out, err := pull.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("git pull failed: %w\n%s", err, out)
-		}
-		fmt.Println(string(out))
+	tui.Info("Pinging https://skills.sh ...")
+	start := time.Now()
+	results, err := skills.Search("test", 1)
+	elapsed := time.Since(start).Round(time.Millisecond)
+	if err != nil {
+		return fmt.Errorf("skills.sh unreachable: %w", err)
 	}
-
-	catalog := skills.ScanDiskSkills(dir)
-	tui.Success(fmt.Sprintf("Catalog refreshed — %d skills available", len(catalog)))
+	tui.Success(fmt.Sprintf("Catalog reachable (%s, %d sample result)", elapsed, len(results)))
+	if len(results) > 0 {
+		s := results[0]
+		fmt.Printf("  sample: %s  ·  %s  ·  %d installs\n", tui.Cyan(s.SkillID), tui.Dim(s.Source), s.Installs)
+	}
 	return nil
 }

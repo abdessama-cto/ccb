@@ -58,26 +58,19 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	// ── 2. Skills cache ──────────────────────────────────────────────────────
-	cacheDir := skills.CacheDir()
-	gitDir := filepath.Join(cacheDir, ".git")
-	if info, err := os.Stat(gitDir); err == nil {
-		age := time.Since(info.ModTime()).Round(time.Hour)
-		list := skills.ScanDiskSkills(cacheDir)
-		status := "pass"
-		if age > 7*24*time.Hour {
-			status = "warn"
-		}
+	// ── 2. skills.sh reachability ────────────────────────────────────────────
+	start := time.Now()
+	if err := skills.Reachable(); err != nil {
 		checks = append(checks, check{
-			label:   "Skills catalog",
-			status:  status,
-			message: fmt.Sprintf("%d skills · last updated %s ago", len(list), age),
+			label:   "skills.sh API",
+			status:  "fail",
+			message: "unreachable: " + err.Error(),
 		})
 	} else {
 		checks = append(checks, check{
-			label:   "Skills catalog",
-			status:  "warn",
-			message: "not cached yet — will be fetched on first 'ccb add skill' or 'ccb sync'",
+			label:   "skills.sh API",
+			status:  "pass",
+			message: fmt.Sprintf("reachable (%s)", time.Since(start).Round(time.Millisecond)),
 		})
 	}
 
