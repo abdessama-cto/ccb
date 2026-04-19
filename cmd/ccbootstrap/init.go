@@ -164,7 +164,14 @@ func runInit(cmd *cobra.Command, args []string) error {
 		tui.Warn("No AI provider configured — skipping AI understanding. Run: ccbootstrap settings")
 	}
 
+	// ── Step 3c: AI Proposals — agents, rules, skills ──────────────────────
+	var proposals *Proposals
+	if understanding != nil && !initFlags.skipQuestionnaire && !initFlags.yes {
+		proposals = RunProposals(destDir, fp, understanding)
+	}
+
 	// ── Step 4: Questionnaire ─────────────────────────────────────────────
+
 	var q *generator.Questionnaire
 	if initFlags.skipQuestionnaire || initFlags.yes {
 		q = defaultQuestionnaire(initFlags.profile)
@@ -198,19 +205,36 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// ── Step 6: Install skills ─────────────────────────────────────────────
+	// ── Step 6: Install skills (from proposals or fallback stack-based) ───────
 	if q.InstallSkills {
-		recommendedSkills := skills.RecommendedSkills(fp.Stack)
-		tui.Info(fmt.Sprintf("Installing %d recommended skills...", len(recommendedSkills)))
-		for _, skill := range recommendedSkills {
-			tui.Info(fmt.Sprintf("  npx skills add %s", skill))
-			if err := skills.Install(destDir, skill); err != nil {
-				tui.Warn(fmt.Sprintf("  Could not install %s: %s", skill, err.Error()))
-			} else {
-				tui.Success(fmt.Sprintf("  %s installed", skill))
+		if proposals != nil {
+			// Log how many skills/agents were written
+			agentCount, skillCount := 0, 0
+			for _, a := range proposals.Agents {
+				if a.Selected {
+					agentCount++
+				}
+			}
+			for _, s := range proposals.Skills {
+				if s.Selected {
+					skillCount++
+				}
+			}
+			tui.Success(fmt.Sprintf("  %d agents, %d skills already written to .claude/", agentCount, skillCount))
+		} else {
+			recommendedSkills := skills.RecommendedSkills(fp.Stack)
+			tui.Info(fmt.Sprintf("Installing %d recommended skills...", len(recommendedSkills)))
+			for _, skill := range recommendedSkills {
+				tui.Info(fmt.Sprintf("  npx skills add %s", skill))
+				if err := skills.Install(destDir, skill); err != nil {
+					tui.Warn(fmt.Sprintf("  Could not install %s: %s", skill, err.Error()))
+				} else {
+					tui.Success(fmt.Sprintf("  %s installed", skill))
+				}
 			}
 		}
 	}
+
 
 	// ── Step 7: Run tests ─────────────────────────────────────────────────
 	if q.RunTests && len(fp.TestFrameworks) > 0 {
