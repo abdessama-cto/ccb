@@ -190,7 +190,7 @@ func (m checkModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.previewText = ""
 				} else {
 					if !m.diskLoaded {
-						m.diskIndex = skills.ScanDiskSkills("")
+						m.diskIndex = skills.LoadSkills()
 						m.diskLoaded = true
 					}
 					// Filter out skills already in proposals

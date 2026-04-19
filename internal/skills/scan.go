@@ -1,4 +1,3 @@
-// Package skills handles skill discovery from the local Antigravity skills directory.
 package skills
 
 import (
@@ -7,7 +6,7 @@ import (
 	"strings"
 )
 
-// DiskSkill is a skill found in the user's skills directory.
+// DiskSkill is a skill parsed from a SKILL.md file on disk.
 type DiskSkill struct {
 	Name        string // from frontmatter `name:` or folder name
 	Description string // from frontmatter `description:` (first 120 chars)
@@ -16,45 +15,59 @@ type DiskSkill struct {
 	Preview     string // first ~300 chars of content after frontmatter
 }
 
-// DefaultSkillsDir returns the path to the user's Antigravity skills directory.
+// DefaultSkillsDir returns the cache path where awesome-claude-skills is cloned.
 func DefaultSkillsDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".gemini", "antigravity", "skills")
+	return CacheDir()
 }
 
-// ScanDiskSkills reads all SKILL.md files from the skills directory and
-// returns a list of parsed skills with name, description, and preview.
+// LoadSkills ensures the awesome-claude-skills repo is present (cloning or
+// pulling if needed) and returns the scanned SKILL.md index.
+func LoadSkills() []DiskSkill {
+	dir, _ := EnsureRepo()
+	return ScanDiskSkills(dir)
+}
+
+// ScanDiskSkills walks the skills directory recursively and returns every
+// SKILL.md it finds, parsed into DiskSkill entries. It handles the layout
+// of awesome-claude-skills, which mixes top-level skills with nested
+// groups like composio-skills/<app>/SKILL.md and document-skills/<sub>/SKILL.md.
 func ScanDiskSkills(skillsDir string) []DiskSkill {
 	if skillsDir == "" {
 		skillsDir = DefaultSkillsDir()
 	}
 
-	entries, err := os.ReadDir(skillsDir)
-	if err != nil {
-		return nil
-	}
-
 	var skills []DiskSkill
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
+	_ = filepath.Walk(skillsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil {
+			return nil
 		}
-		skillMD := filepath.Join(skillsDir, e.Name(), "SKILL.md")
-		data, err := os.ReadFile(skillMD)
-		if err != nil {
-			continue
+		if info.IsDir() {
+			name := info.Name()
+			// Skip VCS and hidden dirs to keep the walk fast.
+			if name == ".git" || strings.HasPrefix(name, ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if info.Name() != "SKILL.md" {
+			return nil
+		}
+
+		folderName := filepath.Base(filepath.Dir(path))
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
 		}
 
 		ds := DiskSkill{
-			FolderName: e.Name(),
-			SkillPath:  skillMD,
-			Name:       e.Name(), // fallback
+			FolderName: folderName,
+			SkillPath:  path,
+			Name:       folderName,
 		}
-
-		content := string(data)
-		ds.Name, ds.Description, ds.Preview = parseSkillMD(content, e.Name())
+		ds.Name, ds.Description, ds.Preview = parseSkillMD(string(data), folderName)
 		skills = append(skills, ds)
-	}
+		return nil
+	})
 	return skills
 }
 

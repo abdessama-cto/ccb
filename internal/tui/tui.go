@@ -27,8 +27,8 @@ func Banner(version string) {
    %s
 
 `,
-		Green("🌱 ccbootstrap"),
-		Dim("— Claude Code Project Bootstrapper"),
+		Green("🌱 ccb"),
+		Dim("— Claude Code Bootstrapper"),
 		Dim(fmt.Sprintf("v%s · macOS Apple Silicon", version)),
 	)
 }

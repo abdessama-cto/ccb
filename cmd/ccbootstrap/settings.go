@@ -14,7 +14,7 @@ import (
 
 var settingsCmd = &cobra.Command{
 	Use:   "settings",
-	Short: "Configure ccbootstrap credentials and preferences",
+	Short: "Configure ccb credentials and preferences",
 	RunE:  runSettings,
 }
 
@@ -141,7 +141,7 @@ func printSettingsMenu(cfg *config.Config) {
 		"",
 	}
 
-	tui.Box("ccbootstrap Settings — v"+Version, lines)
+	tui.Box("ccb Settings — v"+Version, lines)
 }
 
 func keyStatus(key string) string {

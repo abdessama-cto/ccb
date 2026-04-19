@@ -15,6 +15,7 @@ import (
 	"github.com/abdessama-cto/ccb/internal/generator"
 	ghpkg "github.com/abdessama-cto/ccb/internal/github"
 	"github.com/abdessama-cto/ccb/internal/llm"
+	"github.com/abdessama-cto/ccb/internal/skills"
 	"github.com/abdessama-cto/ccb/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -27,12 +28,13 @@ var initFlags struct {
 }
 
 var initCmd = &cobra.Command{
-	Use:   "init [repo-url|.]",
-	Short: "Bootstrap Claude Code config (GitHub repo or local directory)",
-	Long: `Two modes:
-  1. ccbootstrap init <github-url>  — clone & bootstrap a GitHub repo
-  2. ccbootstrap init               — bootstrap the current local directory
-  3. ccbootstrap init .             — same as above
+	Use:     "init [repo-url|.]",
+	Aliases: []string{"i"},
+	Short:   "Bootstrap Claude Code config (GitHub repo or local directory)",
+	Long: `Three modes:
+  1. ccb init <github-url>  — clone & bootstrap a GitHub repo
+  2. ccb init               — bootstrap the current local directory
+  3. ccb init .             — same as above
 
 Generates CLAUDE.md, .claude/ (rules, hooks, commands, agents, skills), docs/.
 Everything tailored to this project by AI. No git push — you keep control.`,
@@ -52,6 +54,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 	startTime := time.Now()
 	tui.Banner(Version)
 
+	// Pre-warm the skills cache in the background so the search UI is instant
+	// when the user reaches the skills selection step.
+	go func() { _, _ = skills.EnsureRepo() }()
+
 	// ── Step 1: Determine mode (local / clone) ───────────────────────────────
 	destDir, repoURL, err := resolveDestination(args)
 	if err != nil {
@@ -70,8 +76,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// ── Step 3: AI configuration check ───────────────────────────────────────
 	cfg, _ := config.Load()
 	if !cfg.AI.IsConfigured() {
-		tui.Err("No AI provider configured. ccbootstrap now requires an LLM to tailor the config.")
-		tui.Info("Run: ccbootstrap settings")
+		tui.Err("No AI provider configured. ccb requires an LLM to tailor the config.")
+		tui.Info("Run: ccb settings  (or: ccb start  for a guided setup)")
 		return fmt.Errorf("AI provider not configured")
 	}
 

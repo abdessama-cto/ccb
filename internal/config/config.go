@@ -151,7 +151,7 @@ func Load() (*Config, error) {
 
 func Save(cfg *Config) error {
 	_ = EnsureDirs()
-	header := "# ccbootstrap config — edit via: ccbootstrap settings\n"
+	header := "# ccb config — edit via: ccb settings\n"
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)

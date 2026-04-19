@@ -13,12 +13,19 @@ import (
 var Version = "0.2.0"
 
 var rootCmd = &cobra.Command{
-	Use:   "ccbootstrap",
-	Short: "Claude Code Project Bootstrapper for Mac Apple Silicon",
-	Long: `ccbootstrap — Analyze any codebase and let AI generate a tailored
+	Use:   "ccb",
+	Short: "Claude Code Bootstrapper — AI-driven project configuration",
+	Long: `ccb — Analyze any codebase and let AI generate a tailored
 Claude Code configuration (CLAUDE.md, .claude/, docs/).
 Flow: analyze → wizard (AI-driven questions) → propose agents/rules/skills → generate.
-No git push or PR — the tool writes files and hands control back to you.`,
+No git push or PR — the tool writes files and hands control back to you.
+
+Getting started:
+  ccb start               # guided onboarding (first time)
+  ccb add skill           # add a skill from the catalog
+  ccb doctor              # check your setup
+
+See 'ccb <command> --help' for more info on a specific command.`,
 	Version: Version,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Ensure config dir exists on every command
@@ -35,7 +42,7 @@ func Execute() {
 
 func init() {
 	rootCmd.SetVersionTemplate(fmt.Sprintf(
-		"ccbootstrap %s · Mac Apple Silicon (arm64-darwin)\n"+
+		"ccb %s · Mac Apple Silicon (arm64-darwin)\n"+
 			"Repo: https://github.com/abdessama-cto/ccb\n",
 		Version,
 	))

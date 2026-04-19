@@ -13,7 +13,7 @@ import (
 
 var selfUpdateCmd = &cobra.Command{
 	Use:   "self-update",
-	Short: "Update ccbootstrap to the latest version",
+	Short: "Update ccb to the latest version",
 	RunE:  runSelfUpdate,
 }
 
@@ -64,7 +64,7 @@ func runSelfUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	binaryURL := fmt.Sprintf(
-		"https://github.com/abdessama-cto/ccb/releases/download/%s/ccbootstrap-%s",
+		"https://github.com/abdessama-cto/ccb/releases/download/%s/ccb-%s",
 		latestVersion, arch,
 	)
 	tmpPath := exe + ".new"

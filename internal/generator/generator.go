@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -160,82 +161,80 @@ func formatBytes(n int) string {
 // ─── .claude/settings.json ────────────────────────────────────────────────────
 
 func generateSettings(fp *analyzer.ProjectFingerprint, q *Questionnaire) string {
-	askList := buildAskList(fp)
-	return fmt.Sprintf(`{
-  "permissions": {
-    "allow": [
-      "Bash(git status)",
-      "Bash(git diff*)",
-      "Bash(git log*)",
-      "Bash(ls*)",
-      "Bash(cat*)",
-      "Bash(grep*)",
-      "Bash(find*)",
-      "Bash(echo*)",
-      "Read(*)",%s
-    ],
-    "deny": [
-      "Bash(rm -rf*)",
-      "Bash(rm -fr*)",
-      "Bash(sudo rm*)",
-      "Bash(git push --force*)",
-      "Bash(git reset --hard*)",
-      "Write(.env)",
-      "Write(.env.local)",
-      "Write(.env.production)",
-      "Write(**/secrets/**)",
-      "Read(**/*.pem)",
-      "Read(**/*.key)",
-      "Read(**/id_rsa)"
-    ],
-    "ask": [%s
-    ]
-  },
-  "env": {
-    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "75"
-  }
-}
-`,
-		buildAllowList(fp),
-		askList,
-	)
+	type settings struct {
+		Permissions struct {
+			Allow []string `json:"allow"`
+			Deny  []string `json:"deny"`
+			Ask   []string `json:"ask"`
+		} `json:"permissions"`
+		Env map[string]string `json:"env"`
+	}
+
+	s := settings{}
+	s.Permissions.Allow = buildAllowPatterns(fp)
+	s.Permissions.Deny = []string{
+		"Bash(rm -rf*)",
+		"Bash(rm -fr*)",
+		"Bash(sudo rm*)",
+		"Bash(git push --force*)",
+		"Bash(git reset --hard*)",
+		"Write(.env)",
+		"Write(.env.local)",
+		"Write(.env.production)",
+		"Write(**/secrets/**)",
+		"Read(**/*.pem)",
+		"Read(**/*.key)",
+		"Read(**/id_rsa)",
+	}
+	s.Permissions.Ask = buildAskPatterns(fp)
+	s.Env = map[string]string{"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "75"}
+
+	data, _ := json.MarshalIndent(s, "", "  ")
+	return string(data) + "\n"
 }
 
-func buildAllowList(fp *analyzer.ProjectFingerprint) string {
-	extras := []string{}
-	for _, s := range fp.Stack {
+func buildAllowPatterns(fp *analyzer.ProjectFingerprint) []string {
+	base := []string{
+		"Bash(git status)",
+		"Bash(git diff*)",
+		"Bash(git log*)",
+		"Bash(ls*)",
+		"Bash(cat*)",
+		"Bash(grep*)",
+		"Bash(find*)",
+		"Bash(echo*)",
+		"Read(*)",
+	}
+	for _, stk := range fp.Stack {
 		switch {
-		case strings.Contains(s, "Laravel"):
-			extras = append(extras, `      "Bash(php artisan*)"`, `      "Bash(composer*)"`)
-		case strings.Contains(s, "Next") || strings.Contains(s, "React") || strings.Contains(s, "Node") || strings.Contains(s, "NestJS"):
-			extras = append(extras, `      "Bash(npm run*)"`, `      "Bash(npx*)"`)
-		case strings.Contains(s, "Django") || strings.Contains(s, "FastAPI") || strings.Contains(s, "Flask"):
-			extras = append(extras, `      "Bash(python*)"`, `      "Bash(pytest*)"`)
-		case s == "Go" || strings.HasPrefix(s, "Go/"):
-			extras = append(extras, `      "Bash(go build*)"`, `      "Bash(go test*)"`)
+		case strings.Contains(stk, "Laravel"):
+			base = append(base, "Bash(php artisan*)", "Bash(composer*)")
+		case strings.Contains(stk, "Next") || strings.Contains(stk, "React") || strings.Contains(stk, "Node") || strings.Contains(stk, "NestJS"):
+			base = append(base, "Bash(npm run*)", "Bash(npx*)")
+		case strings.Contains(stk, "Django") || strings.Contains(stk, "FastAPI") || strings.Contains(stk, "Flask"):
+			base = append(base, "Bash(python*)", "Bash(pytest*)")
+		case stk == "Go" || strings.HasPrefix(stk, "Go/"):
+			base = append(base, "Bash(go build*)", "Bash(go test*)")
 		}
 	}
-	if len(extras) == 0 {
-		return ""
-	}
-	return "\n" + strings.Join(extras, ",\n") + ","
+	return base
 }
 
-func buildAskList(fp *analyzer.ProjectFingerprint) string {
-	asks := []string{`
-      "Bash(git push*)"`,
-		`"Bash(git reset*)"`,
-		`"Bash(git rebase*)"`,
+func buildAskPatterns(fp *analyzer.ProjectFingerprint) []string {
+	asks := []string{
+		"Bash(git push*)",
+		"Bash(git reset*)",
+		"Bash(git rebase*)",
 	}
-	for _, s := range fp.Stack {
-		if strings.Contains(s, "Laravel") {
-			asks = append(asks, `"Bash(php artisan migrate*)"`, `"Bash(composer update)"`)
+	for _, stk := range fp.Stack {
+		if strings.Contains(stk, "Laravel") {
+			asks = append(asks, "Bash(php artisan migrate*)", "Bash(composer update)")
 		}
-		if strings.Contains(s, "Next") || strings.Contains(s, "NestJS") {
-			asks = append(asks, `"Bash(npm install)"`)
+		if strings.Contains(stk, "Next") || strings.Contains(stk, "NestJS") {
+			asks = append(asks, "Bash(npm install)")
 		}
 	}
-	return "\n      " + strings.Join(asks, ",\n      ")
+	return asks
 }
 
 // ─── Commands (.claude/commands/*.md) ─────────────────────────────────────────
@@ -393,7 +392,7 @@ exit 0
 func hookStopNotify() string {
 	return `#!/bin/bash
 # .claude/hooks/stop-notify.sh — Desktop notification on task complete (Stop)
-osascript -e 'display notification "Claude Code finished your task" with title "ccbootstrap" sound name "Glass"' 2>/dev/null || true
+osascript -e 'display notification "Claude Code finished your task" with title "ccb" sound name "Glass"' 2>/dev/null || true
 exit 0
 `
 }
@@ -448,7 +447,7 @@ func generateArchitectureStub(fp *analyzer.ProjectFingerprint, u *llm.ProjectUnd
 	}
 	return fmt.Sprintf(`# Architecture
 
-> Auto-generated by ccbootstrap — update this file to reflect the real architecture.
+> Auto-generated by ccb — update this file to reflect the real architecture.
 
 ## Stack
 %s
@@ -463,7 +462,7 @@ func generateProgressMD() string {
 
 ## %s — Initial Setup
 
-- ✅ Bootstrapped with ccbootstrap
+- ✅ Bootstrapped with ccb
 - ✅ Generated CLAUDE.md, .claude/, docs/ structure
 
 ## Next Steps

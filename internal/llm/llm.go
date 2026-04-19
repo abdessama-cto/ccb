@@ -123,7 +123,7 @@ type openAIResponse struct {
 
 func callOpenAI(apiKey, model, prompt string) (string, error) {
 	if apiKey == "" {
-		return "", fmt.Errorf("OpenAI API key not set — run: ccbootstrap settings")
+		return "", fmt.Errorf("OpenAI API key not set — run: ccb settings")
 	}
 	body, _ := json.Marshal(openAIRequest{
 		Model:       model,
@@ -187,7 +187,7 @@ type geminiResponse struct {
 
 func callGemini(apiKey, model, prompt string) (string, error) {
 	if apiKey == "" {
-		return "", fmt.Errorf("Gemini API key not set — run: ccbootstrap settings")
+		return "", fmt.Errorf("Gemini API key not set — run: ccb settings")
 	}
 
 	type Part struct {
