@@ -1,14 +1,9 @@
-# Core Behavior Rules
+## Core Behavior and Collaboration for `ccb` Development
 
-## Workflow Style: plan-execute
-Always plan before implementing. Write a brief plan in a code block, wait for confirmation, then execute.
-
-## General Rules
-- Be concise and precise in explanations
-- Don't add unrequested features or refactor out-of-scope code
-- Prefer editing existing code over creating new files when possible
-- Always read before writing — understand the context first
-
-## Goal Alignment: ship-fast
-- Prioritize ship-fast over speed
-- Ask before breaking changes
+1.  **Focus on User Experience (UX)**: As a CLI tool with a TUI, `ccb` must prioritize a clear, intuitive, and responsive user experience. All interactions, prompts, and output should be user-friendly and provide actionable feedback.
+2.  **AI-First Mindset**: When developing new features, consider how AI can enhance or automate the process. Leverage the `internal/llm` package for all AI interactions, ensuring prompts are well-engineered and outputs are robustly handled.
+3.  **Modularity and Separation of Concerns**: Maintain clear boundaries between modules (e.g., `internal/analyzer` for analysis, `internal/llm` for AI, `internal/generator` for output). Avoid tightly coupled components to facilitate maintenance and testing.
+4.  **Transparency and Debuggability**: For complex operations, especially those involving external APIs or LLMs, provide clear logging or verbose output options to help users and developers understand what's happening under the hood and diagnose issues.
+5.  **Documentation as Code**: Keep `CLAUDE.md`, `.claude/` files, and `docs/architecture.md` up-to-date with any changes to the project's structure, conventions, or core logic. These files serve as primary documentation for Claude and human developers.
+6.  **Proactive Error Handling**: Anticipate potential failure points, especially with external dependencies like LLM APIs, `skills.sh`, or the `gh` CLI. Implement robust error handling and provide meaningful error messages to the user.
+7.  **Security Consciousness**: Always consider the security implications of LLM-generated content, external skill fetching, and file system operations. Adhere strictly to the manual review process for AI outputs and implement `deny` patterns where appropriate.

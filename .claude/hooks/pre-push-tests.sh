@@ -4,7 +4,7 @@ CMD=$(echo "$CLAUDE_TOOL_INPUT" | jq -r '.command // ""' 2>/dev/null)
 [[ "$CMD" != *"git push"* ]] && exit 0
 
 echo "🧪 Running tests before push..." >&2
-# No test command detected — add yours here
+go test ./...
 if [[ $? -ne 0 ]]; then
   echo "❌ Tests failing. Push blocked. Fix tests first." >&2
   exit 2

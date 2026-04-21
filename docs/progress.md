@@ -2,10 +2,10 @@
 
 ## 2026-04-19 — Initial Setup
 
-- ✅ Bootstrapped with ccbootstrap
+- ✅ Bootstrapped with ccb
 - ✅ Generated CLAUDE.md, .claude/, docs/ structure
 
 ## Next Steps
-- [ ] Review and update CLAUDE.md with project-specific context
-- [ ] Add architecture details to docs/architecture.md
+- [ ] Review the AI-generated CLAUDE.md and refine
+- [ ] Review .claude/rules/ and adjust if needed
 - [ ] Start development

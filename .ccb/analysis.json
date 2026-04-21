@@ -1,0 +1,83 @@
+{
+  "version": "2",
+  "created_at": "2026-04-19T23:01:08.079629+01:00",
+  "provider": "gemini",
+  "model": "gemini-2.5-flash",
+  "files_count": 45,
+  "tokens_estimated": 46335,
+  "fingerprint": {
+    "RepoURL": "https://github.com/abdessama-cto/ccb.git",
+    "Stack": [
+      "Go"
+    ],
+    "Language": "Go",
+    "LOC": 7392,
+    "Files": 38,
+    "Commits": 32,
+    "TestFrameworks": [
+      "go test"
+    ],
+    "HasCI": false,
+    "HasDocker": false,
+    "HasEnvFile": false,
+    "Age": "greenfield (32 commits)",
+    "Coverage": "unknown"
+  },
+  "understanding": {
+    "project_name": "ccb (Claude Code Bootstrapper)",
+    "purpose": "This CLI tool, native to macOS Apple Silicon, automates the setup of Claude Code configurations for any GitHub repository or local project. It analyzes the codebase, guides the user through an AI-driven questionnaire, and generates a tailored set of Claude Code files (CLAUDE.md, agents, rules, skills, documentation). It's used by developers to quickly integrate AI assistance into their projects, ensuring best practices and saving significant setup time.",
+    "domain": "Developer tool, AI/LLM integration, CLI utility, Code analysis",
+    "architecture": "Go CLI application using Cobra for command-line parsing and Charmbracelet's Bubble Tea for interactive TUI elements. It integrates with external LLM providers (OpenAI, Google Gemini, Ollama) via HTTP APIs for core AI logic. Static code analysis is performed locally, and generated files are written to the project directory. GitHub CLI (`gh`) is used for repository operations and authentication. Configuration is managed via YAML files, and analysis results are cached locally.",
+    "key_features": [
+      "Automated Claude Code configuration generation (CLAUDE.md, .claude/, docs/)",
+      "Static and AI-driven semantic codebase analysis",
+      "Interactive, AI-generated project setup wizard",
+      "AI-driven proposals for agents, rules, and skills",
+      "Integration with skills.sh for skill discovery and installation",
+      "Support for multiple LLM providers (OpenAI, Gemini, Ollama)",
+      "GitHub repository cloning, authentication, and PR creation via gh CLI",
+      "Self-update and uninstall capabilities",
+      "Rich Terminal User Interface (TUI) for interactive workflows"
+    ],
+    "main_modules": [
+      "cmd/ccbootstrap: Defines all CLI commands and their execution logic.",
+      "internal/analyzer: Performs static code analysis (stack, LOC, tests, CI/CD, Docker, .env detection) and extracts semantic context for AI.",
+      "internal/cache: Manages caching of AI-generated project analysis results.",
+      "internal/config: Handles loading, saving, and migration of global user configuration (AI keys, models, UI preferences).",
+      "internal/generator: Writes the final Claude Code configuration files to disk, combining LLM output with deterministic templates.",
+      "internal/github: Provides utilities for interacting with GitHub (auth, cloning, commit counting, repo name parsing).",
+      "internal/llm: Offers a unified interface for calling various LLM providers, including prompt building, response parsing, and robust JSON/text sanitization.",
+      "internal/skills: Interacts with the skills.sh API to search for and fetch raw SKILL.md content from GitHub.",
+      "internal/tui: Provides reusable terminal UI components like spinners, banners, and colored output for a consistent user experience."
+    ],
+    "api_endpoints": [
+      "GET https://skills.sh/api/search — Search for Claude Code skills.",
+      "GET https://raw.githubusercontent.com/\u003cowner\u003e/\u003crepo\u003e/\u003cbranch\u003e/\u003cpath\u003e/SKILL.md — Fetch raw skill content from GitHub.",
+      "POST https://api.openai.com/v1/chat/completions — OpenAI chat completions API.",
+      "POST http://localhost:11434/api/generate — Ollama local LLM generation API (configurable URL).",
+      "POST https://generativelanguage.googleapis.com/v1beta/models/\u003cmodel\u003e:generateContent — Google Gemini API.",
+      "GET https://api.github.com/repos/abdessama-cto/ccb/releases/latest — GitHub API for fetching latest release version."
+    ],
+    "external_services": [
+      "skills.sh: Provides a catalog and API for discovering and fetching Claude Code skills.",
+      "GitHub: Used for cloning repositories, fetching raw file content (e.g., SKILL.md), and managing releases. Relies on the `gh` CLI for user authentication and pull request creation.",
+      "OpenAI: A primary LLM provider for AI-driven code analysis, question generation, and content generation.",
+      "Google Gemini: An alternative LLM provider for AI-driven tasks.",
+      "Ollama: A local LLM runtime, allowing users to run AI models on their machine without external API calls.",
+      "Homebrew: macOS package manager used by the `install.sh` script to install runtime dependencies like `git`, `gh`, `jq`, and `node`.",
+      "npx: Node.js package runner used to execute the `skills` CLI for installing skills."
+    ],
+    "conventions": [
+      "CLI commands follow a `ccb \u003ccommand\u003e [subcommand]` structure using `cobra`.",
+      "Configuration files are YAML (`~/.ccb/config.yaml`) for global settings and JSON (`.claude/settings.json`) for project-specific settings.",
+      "Claude Code artifacts are organized within a `.claude/` directory, with subdirectories for `agents/`, `rules/`, `skills/`, `commands/`, and `hooks/`.",
+      "Generated filenames for agents and skills are typically kebab-case with a `.md` extension (e.g., `payment-webhook-guard.md`).",
+      "LLM outputs for file generation adhere to a specific plain-text delimiter format (`=== FILE: path ===\\ncontent\\n=== END FILE ===`) to avoid JSON parsing issues.",
+      "Error handling uses Go's standard `error` interface, often wrapping underlying errors for context.",
+      "Terminal UI elements are consistently styled using `charmbracelet/lipgloss`.",
+      "The installer script (`install.sh`) follows common shell scripting best practices for platform checks and dependency management."
+    ],
+    "tech_notes": "The `internal/llm` package contains critical logic for robust LLM interaction, including sophisticated JSON sanitization (`sanitizeJSONStrings`) and a custom plain-text file block parser (`scanFileBlocks`) to handle common LLM output formatting inconsistencies and errors. This ensures reliability despite varied LLM responses. Context management for LLMs is handled by intelligently selecting and ranking files for inclusion in prompts, and by truncating prompts based on `MaxContextChars` per provider. The TUI is built on `charmbracelet/bubbletea`, providing a modern, interactive terminal experience. The tool includes migration logic for legacy configuration and cache directories (`.ccbootstrap` to `.ccb`) to ensure backward compatibility. Security considerations include `deny` patterns in generated `.claude/settings.json` to restrict potentially dangerous `Bash` commands and sensitive file access for AI agents.",
+    "what_claude_should_know": "This is a Go CLI tool (`ccb`) designed to bootstrap Claude Code configurations for other projects. Its core functionality relies heavily on external LLM APIs (OpenAI, Gemini, Ollama) for understanding code, generating questions, and producing configuration files. All AI interactions are centralized in the `internal/llm` package, which is crucial for prompt engineering and handling LLM output. The tool operates by analyzing a target Git repository, guiding the user through an interactive wizard, and generating a comprehensive `.claude/` directory structure, `CLAUDE.md`, and `docs/` tailored to that project. Configuration is stored in `~/.ccb/config.yaml`, and project analysis is cached in `.ccb/analysis.json`. When working on AI-related features, always consider the prompt structure, the expected LLM output format (plain-text file blocks or JSON), and the robust parsing/sanitization logic in `internal/llm`."
+  }
+}

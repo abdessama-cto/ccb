@@ -1,6 +1,6 @@
 # /test — Run test suite
 
-Run: `# No test command detected — add yours here`
+Run: `go test ./...`
 
 Then:
 1. Report pass/fail count

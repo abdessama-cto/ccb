@@ -10,6 +10,8 @@
       "Bash(find*)",
       "Bash(echo*)",
       "Read(*)",
+      "Bash(go build*)",
+      "Bash(go test*)"
     ],
     "deny": [
       "Bash(rm -rf*)",
@@ -26,7 +28,6 @@
       "Read(**/id_rsa)"
     ],
     "ask": [
-      
       "Bash(git push*)",
       "Bash(git reset*)",
       "Bash(git rebase*)"
