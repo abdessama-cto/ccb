@@ -40,6 +40,7 @@ func Generate(
 	version string,
 	backupFrom string,
 ) error {
+	migrateLegacyProjectCacheDir(targetDir)
 	if err := ensureDirs(targetDir); err != nil {
 		return err
 	}
@@ -142,6 +143,11 @@ func Generate(
 
 // ccbDirs returns the project-relative directories ccb creates during init.
 // They are tracked in the manifest so `ccb uninstall` can remove empty ones.
+//
+// We no longer auto-create docs/decisions/, docs/solutions/, docs/brainstorms/
+// unconditionally — those only appear if the LLM or user populates them. An
+// empty dir referenced in CLAUDE.md via @docs/decisions/ just creates dead
+// links and clutters the project root.
 func ccbDirs() []string {
 	return []string{
 		".claude/rules",
@@ -150,9 +156,6 @@ func ccbDirs() []string {
 		".claude/agents",
 		".claude/skills",
 		".claude",
-		"docs/decisions",
-		"docs/solutions",
-		"docs/brainstorms",
 		"docs",
 	}
 }
@@ -165,6 +168,36 @@ func ensureDirs(targetDir string) error {
 		}
 	}
 	return nil
+}
+
+// migrateLegacyProjectCacheDir renames <projectDir>/.ccbootstrap to .ccb/ so
+// projects bootstrapped before v0.9.5 don't end up with both directories.
+// Silent no-op if either the legacy dir is absent or the new dir already
+// contains a colliding file.
+func migrateLegacyProjectCacheDir(projectDir string) {
+	legacy := filepath.Join(projectDir, ".ccbootstrap")
+	info, err := os.Stat(legacy)
+	if err != nil || !info.IsDir() {
+		return
+	}
+	current := filepath.Join(projectDir, ".ccb")
+	// If .ccb/ does not exist at all → straight rename.
+	if _, err := os.Stat(current); os.IsNotExist(err) {
+		_ = os.Rename(legacy, current)
+		return
+	}
+	// Otherwise, merge legacy files into .ccb/ (non-destructive — skip collisions).
+	entries, _ := os.ReadDir(legacy)
+	for _, e := range entries {
+		src := filepath.Join(legacy, e.Name())
+		dst := filepath.Join(current, e.Name())
+		if _, err := os.Stat(dst); err == nil {
+			continue // don't overwrite
+		}
+		_ = os.Rename(src, dst)
+	}
+	// Attempt to remove the legacy dir if it's now empty.
+	_ = os.Remove(legacy)
 }
 
 func writeWithProgress(targetDir string, files []llm.GeneratedFile) error {
@@ -228,15 +261,13 @@ func generateSettings(fp *analyzer.ProjectFingerprint, q *Questionnaire) string 
 }
 
 func buildAllowPatterns(fp *analyzer.ProjectFingerprint) []string {
+	// We intentionally skip ls/cat/grep/find/echo here: Claude Code has
+	// dedicated tools (Read, Grep, Glob) that are preferred over raw bash
+	// equivalents, so auto-allowing those bash variants is noise.
 	base := []string{
 		"Bash(git status)",
 		"Bash(git diff*)",
 		"Bash(git log*)",
-		"Bash(ls*)",
-		"Bash(cat*)",
-		"Bash(grep*)",
-		"Bash(find*)",
-		"Bash(echo*)",
 		"Read(*)",
 	}
 	for _, stk := range fp.Stack {
@@ -346,8 +377,10 @@ Keep entries concise (< 10 lines each).
 
 func hookAutoFormat(fp *analyzer.ProjectFingerprint) string {
 	return `#!/bin/bash
-# .claude/hooks/post-edit-format.sh — Auto-format after edit (PostToolUse)
-FILE=$(echo "$CLAUDE_TOOL_INPUT" | jq -r '.file_path // .path // ""' 2>/dev/null)
+# .claude/hooks/post-edit-format.sh — Auto-format after edit (PostToolUse).
+# Claude Code delivers hook input as JSON on stdin.
+INPUT=$(cat)
+FILE=$(echo "$INPUT" | jq -r '.tool_input.file_path // .tool_input.path // ""' 2>/dev/null)
 [[ -z "$FILE" ]] && exit 0
 
 case "$FILE" in
@@ -381,8 +414,11 @@ EOF
 
 func hookSecretScan() string {
 	return `#!/bin/bash
-# .claude/hooks/pre-edit-secret-scan.sh — Scan content for secrets (PreToolUse)
-CONTENT=$(echo "$CLAUDE_TOOL_INPUT" | jq -r '.content // .new_string // ""' 2>/dev/null)
+# .claude/hooks/pre-edit-secret-scan.sh — Scan content for secrets (PreToolUse).
+# Claude Code delivers hook input as JSON on stdin. Exit code 2 blocks the
+# tool call and surfaces the stderr message back to Claude.
+INPUT=$(cat)
+CONTENT=$(echo "$INPUT" | jq -r '.tool_input.content // .tool_input.new_string // ""' 2>/dev/null)
 [[ -z "$CONTENT" ]] && exit 0
 
 PATTERNS=(
@@ -408,8 +444,10 @@ exit 0
 
 func hookAutoCommit() string {
 	return `#!/bin/bash
-# .claude/hooks/post-edit-auto-commit.sh — Atomic commit after edit (PostToolUse)
-FILE=$(echo "$CLAUDE_TOOL_INPUT" | jq -r '.file_path // .path // ""' 2>/dev/null)
+# .claude/hooks/post-edit-auto-commit.sh — Atomic commit after edit (PostToolUse).
+# Hook input is JSON on stdin.
+INPUT=$(cat)
+FILE=$(echo "$INPUT" | jq -r '.tool_input.file_path // .tool_input.path // ""' 2>/dev/null)
 [[ -z "$FILE" ]] && exit 0
 [[ ! -d .git ]] && exit 0
 
@@ -434,8 +472,10 @@ exit 0
 func hookPrePushTests(fp *analyzer.ProjectFingerprint) string {
 	testCmd := buildTestCommand(fp)
 	return fmt.Sprintf(`#!/bin/bash
-# .claude/hooks/pre-push-tests.sh — Run tests before git push (PreToolUse)
-CMD=$(echo "$CLAUDE_TOOL_INPUT" | jq -r '.command // ""' 2>/dev/null)
+# .claude/hooks/pre-push-tests.sh — Run tests before git push (PreToolUse).
+# Hook input is JSON on stdin.
+INPUT=$(cat)
+CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null)
 [[ "$CMD" != *"git push"* ]] && exit 0
 
 echo "🧪 Running tests before push..." >&2
@@ -451,8 +491,10 @@ exit 0
 
 func hookAuditLog() string {
 	return `#!/bin/bash
-# .claude/hooks/pre-bash-audit.sh — Audit log for bash commands (PreToolUse)
-CMD=$(echo "$CLAUDE_TOOL_INPUT" | jq -r '.command // ""' 2>/dev/null)
+# .claude/hooks/pre-bash-audit.sh — Audit log for bash commands (PreToolUse).
+# Hook input is JSON on stdin.
+INPUT=$(cat)
+CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null)
 [[ -z "$CMD" ]] && exit 0
 
 TIMESTAMP=$(date -Iseconds 2>/dev/null || date)

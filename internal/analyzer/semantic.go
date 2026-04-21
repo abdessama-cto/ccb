@@ -141,6 +141,11 @@ CRITICAL: Return ONLY the JSON — no markdown code fences, no text before or af
 	return sb.String()
 }
 
+// RankFiles orders file keys by importance for prompt packing. Exposed so
+// callers (like the batched understanding pipeline) can iterate files in
+// the same priority as the single-call prompt.
+func RankFiles(files map[string]string) []string { return rankFiles(files) }
+
 // rankFiles orders files by their importance signal
 func rankFiles(files map[string]string) []string {
 	type scored struct {

@@ -31,11 +31,37 @@ func buildAgentPrompt(u *ProjectUnderstanding, fp *analyzer.ProjectFingerprint, 
 	var sb strings.Builder
 	sb.WriteString(`You are creating a Claude Code subagent (.claude/agents/*.md) tailored to a specific project.
 
-RULES:
-- The file must start with YAML frontmatter containing at minimum: name, description, and tools.
-- "description" must make it obvious WHEN Claude should invoke this agent (trigger phrases, task types).
-- Body must be specific to THIS project — cite code, modules, or domain facts you observed.
-- Keep total length under 150 lines.
+The agent file MUST have TWO parts:
+
+1. YAML frontmatter:
+   ---
+   name: kebab-case-name
+   description: one sentence that makes it obvious when Claude should invoke this agent (include example trigger phrases from this project's domain).
+   tools: Read, Edit, Bash
+   ---
+
+   Valid tool names (use ONLY these, comma-separated — pick what the agent
+   actually needs, not a kitchen sink):
+
+     Read, Write, Edit, Bash, Grep, Glob, WebFetch, WebSearch, Agent, BashOutput, KillShell, Skill, Task, TodoWrite, NotebookEdit
+
+2. A body of at least 25 lines, structured with these sections:
+
+   ## When to use this agent
+   - 2-3 concrete trigger scenarios grounded in THIS codebase.
+
+   ## How this agent works
+   - Numbered step-by-step approach the agent follows.
+
+   ## Relevant files in this project
+   - 3-8 real file paths the agent touches, with a one-line purpose each.
+
+   (Optional) ## Examples or ## Common pitfalls
+
+   An agent with only frontmatter is unusable — always include the body.
+
+Phrase everything as guidance grounded in the project, not as commandments.
+Keep the total file under 150 lines.
 
 `)
 

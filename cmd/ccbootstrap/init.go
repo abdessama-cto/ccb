@@ -261,14 +261,16 @@ func resolveDestination(args []string) (destDir, repoURL string, err error) {
 	return destDir, repoURL, nil
 }
 
-// contextLimitForProvider returns the character budget for the full-codebase prompt.
-// Ollama is limited because local models typically have smaller context windows.
-// All cloud providers (OpenAI, Gemini) assume ~1M tokens (~4M chars).
+// contextLimitForProvider returns the character budget for the full-codebase
+// prompt. Cloud providers (OpenAI, Gemini) are 1M-token windows — we assume
+// ~3 chars/token for source code (denser than prose) and leave headroom for
+// the prompt scaffolding and tokenizer variance. Ollama is lower because
+// local models typically have 8K–128K windows.
 func contextLimitForProvider(provider string) int {
 	if provider == "ollama" {
 		return 100_000
 	}
-	return 4_000_000
+	return 2_800_000
 }
 
 // ensureUnderstanding loads the cached AI analysis or runs a fresh one.
@@ -296,11 +298,10 @@ func ensureUnderstanding(destDir string, fp *analyzer.ProjectFingerprint, cfg *c
 	extractSpin.Success(fmt.Sprintf("Extracted %d files · ~%dk tokens",
 		len(semCtx.Files), semCtx.TokenEst/1000))
 
-	prompt := analyzer.BuildAIPromptLimited(semCtx, fp, llmCfg.MaxContextChars)
-	understandSpin := tui.StartSpinner(fmt.Sprintf("Sending %dk chars to %s, waiting for understanding...",
-		len(prompt)/1000, cfg.AI.ActiveModel()))
-
-	understanding, err := llm.UnderstandProject(llmCfg, prompt)
+	understandSpin := tui.StartSpinner(fmt.Sprintf("Asking %s to understand this codebase...", cfg.AI.ActiveModel()))
+	understanding, err := llm.UnderstandProjectSmart(llmCfg, semCtx, fp, func(stage string) {
+		understandSpin.Update(stage)
+	})
 	if err != nil {
 		understandSpin.Fail("AI understanding failed")
 		return nil, fmt.Errorf("AI understanding failed: %w", err)

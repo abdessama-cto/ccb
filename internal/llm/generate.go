@@ -60,48 +60,95 @@ func buildGenerationPrompt(
 ) string {
 	var sb strings.Builder
 	sb.WriteString(`You are writing the Claude Code configuration for a specific project.
-Produce the full content of every file listed in the OUTPUT MANIFEST below.
+The audience is a developer who will invoke Claude on THIS codebase daily. Your
+goal is to produce files that MAKE THEIR LIFE EASIER — not to lecture them.
 
-CONTENT RULES:
-- Use the project understanding, the wizard answers, and the selected items as input.
-- Tailor every file to THIS project. Do NOT write generic boilerplate that would apply anywhere.
-- Agents and skills: include YAML frontmatter with "name", "description", and "tools" when relevant.
-  Agent description should make it clear when Claude should invoke the agent.
-- Rules files: concise, actionable, enforceable. Cite project-specific examples where useful.
-- CLAUDE.md: start with a one-paragraph purpose statement, then list the stack, key modules,
-  project conventions, and strict rules. Keep it under ~150 lines.
-- docs/architecture.md: expand on architecture with module breakdown, data flow, external services.
+PHILOSOPHY — follow it in every file:
+- Prefer guidance over commandments. Claude Code works best with context, not
+  "rules". Never use all-caps imperatives ("NEVER", "ALWAYS", "MUST"). Instead,
+  describe how things work here and why: "When X, prefer Y because Z".
+- Point to real code. Cite concrete file paths, function names, and modules
+  you observed — not abstract principles. Every claim should be grounded.
+- Short and useful beats long and exhaustive. If a file has nothing
+  project-specific to say, keep it tight. Generic boilerplate is noise.
+- Small projects deserve small configs. A 2k-LOC CLI does not need a 10-rule
+  manifesto. Scale the content to the project.
 
-OUTPUT FORMAT — STRICTLY FOLLOW THIS (NOT JSON):
-
-For every file, emit a block delimited by these exact markers on their own lines:
+OUTPUT FORMAT — emit blocks with these exact markers on their own lines:
 
 === FILE: <relative/path> ===
-<raw file content here — no escaping, no JSON, no backticks wrapping>
+<raw file content — no escaping, no JSON, no triple backticks wrapping>
 === END FILE ===
 
-Rules for the format:
-- The opening marker MUST be "=== FILE: " followed by the path and " ===" on a single line.
-- The closing marker MUST be exactly "=== END FILE ===" on its own line.
-- Put the raw file content between the markers, exactly as it should be written to disk.
-- You do NOT need to escape quotes, backslashes, or newlines — write content as-is.
-- Do NOT wrap the content in triple backticks or any code fence.
-- Do NOT add commentary, preamble, or trailing prose outside the blocks.
-- Produce every file from the manifest in order.
+- The closing marker is exactly "=== END FILE ===" on its own line.
+- Do not add commentary outside the blocks. Produce every file in the manifest.
 
-Example (for illustration only — produce the actual files requested below):
+CLAUDE CODE TOOL NAMES (for agent "tools:" frontmatter — use these exact names,
+never invent others):
 
-=== FILE: CLAUDE.md ===
-# My Project
+  Read, Write, Edit, Bash, Grep, Glob, WebFetch, WebSearch, Agent, BashOutput, KillShell, Skill, Task, TodoWrite, NotebookEdit
 
-Some prose with "quotes" and \backslashes\ that need no escaping.
-=== END FILE ===
+AGENT FILES (.claude/agents/*.md) — EVERY agent MUST have:
 
-=== FILE: .claude/rules/01-core-behavior.md ===
-# Core Behavior
-- Rule 1
-- Rule 2
-=== END FILE ===
+1. YAML frontmatter:
+     ---
+     name: kebab-case-name
+     description: one sentence that makes it obvious when Claude should invoke this agent (include example trigger phrases).
+     tools: Read, Edit, Bash  (comma-separated; pick from the list above, only what the agent actually needs)
+     ---
+2. A BODY — at least 25 lines of actionable content:
+     - A "## When to use this agent" section with 2-3 concrete trigger scenarios from THIS codebase.
+     - A "## How this agent works" section: the step-by-step approach it follows.
+     - A "## Relevant files in this project" section naming 3-8 real paths the agent will touch.
+     - Optional: examples of good vs. bad output, or common pitfalls.
+
+   An agent with only frontmatter is a BUG — do not emit one.
+
+SKILL FILES (.claude/skills/*.md) — each skill is a procedure Claude can run.
+Every skill MUST have:
+
+1. YAML frontmatter:
+     ---
+     name: kebab-case-name
+     description: 1-2 sentences describing what the skill teaches Claude to do in this project.
+     ---
+2. A BODY with a concrete, step-by-step procedure (at least 20 lines):
+     - A "## When to apply" section with 1-2 trigger situations.
+     - A numbered "## Steps" section — actionable steps grounded in THIS codebase (reference real files and functions).
+     - A "## Example" section (optional but encouraged): one small before/after or shell snippet.
+
+RULES FILES (.claude/rules/0N-*.md) — guidance, not commandments:
+
+- Phrase things as "When you're doing X, here's how this project does it" instead of "NEVER do X".
+- Ground every item in a real file or a real pattern seen in the code.
+- Keep each file under 40 lines. If you cannot fill 10 useful lines, skip
+  generic ones — a short rules file beats a padded one.
+- 05-project-specific.md in particular should contain ONLY things unique to
+  this project. Do not duplicate anything already stated in CLAUDE.md.
+
+CLAUDE.md:
+
+- Start with 2-3 sentences explaining what the project does and who uses it.
+- "## Stack" — bulleted, concise.
+- "## How to run / test / build" — the actual commands for this project.
+  Skip this section if nothing is obvious from the code.
+- "## Key modules" — a short guided tour of 4-8 directories or files with
+  one-line descriptions of each.
+- "## Conventions" — patterns you observed in the code (not generic best
+  practices). 4-8 items.
+- "## Guidance for Claude" — replaces the old "Strict Rules" section. Max 6
+  items, phrased as guidance ("When adding X, follow Y"), not as commandments.
+  Reference the real rules files for detail instead of duplicating content.
+
+docs/architecture.md:
+
+- Target ~60-120 lines for small projects, longer only if the project is big.
+- Cover: high-level flow, module breakdown (each module = 1-3 lines), external
+  integrations, and any unusual patterns. Concrete paths > diagrams unless the
+  architecture is genuinely graph-shaped.
+
+EVIDENCE CHECK — before referencing any file or function, confirm it appears
+in the "Project understanding" block below. If it doesn't, do not invent it.
 
 `)
 
@@ -115,6 +162,10 @@ Some prose with "quotes" and \backslashes\ that need no escaping.
 	sb.WriteString(fmt.Sprintf("Stack: %s\nLanguage: %s\nLOC: %d across %d files\nTests: %s\nCI: %v · Docker: %v · .env: %v\n\n",
 		fp.StackString(), fp.Language, fp.LOC, fp.Files,
 		fp.TestFrameworksString(), fp.HasCI, fp.HasDocker, fp.HasEnvFile))
+
+	sb.WriteString("## Project size hint\n")
+	sb.WriteString(projectSizeHint(fp))
+	sb.WriteString("\n\n")
 
 	if len(answers) > 0 {
 		sb.WriteString("## Wizard answers\n")
@@ -131,12 +182,12 @@ Some prose with "quotes" and \backslashes\ that need no escaping.
 	sb.WriteString("- `.claude/rules/01-core-behavior.md` — workflow + collaboration style\n")
 	sb.WriteString("- `.claude/rules/02-git-workflow.md` — branching, commits, PR discipline\n")
 	sb.WriteString("- `.claude/rules/03-testing.md` — testing expectations for this stack\n")
-	sb.WriteString("- `.claude/rules/04-code-quality.md` — quality + security rules for this language/framework\n")
-	sb.WriteString("- `.claude/rules/05-project-specific.md` — rules derived from the wizard + selected rules below\n")
+	sb.WriteString("- `.claude/rules/04-code-quality.md` — quality + security guidance for this language/framework\n")
+	sb.WriteString("- `.claude/rules/05-project-specific.md` — guidance unique to THIS project (no overlap with CLAUDE.md)\n")
 	sb.WriteString("- `docs/architecture.md` — architecture documentation for this codebase\n\n")
 
 	if len(agents) > 0 {
-		sb.WriteString("### Selected agents — produce one file per agent\n")
+		sb.WriteString("### Selected agents — produce one file per agent (each with a FULL body, not just frontmatter)\n")
 		for _, a := range agents {
 			sb.WriteString(fmt.Sprintf("- `.claude/agents/%s` — name: %s — %s — reason: %s\n",
 				a.Filename, a.Name, a.Description, a.Reason))
@@ -145,7 +196,7 @@ Some prose with "quotes" and \backslashes\ that need no escaping.
 	}
 
 	if len(skills) > 0 {
-		sb.WriteString("### Selected skills — produce one file per skill\n")
+		sb.WriteString("### Selected skills — produce one file per skill (each with a FULL body, not just frontmatter)\n")
 		for _, s := range skills {
 			sb.WriteString(fmt.Sprintf("- `.claude/skills/%s` — name: %s — %s — reason: %s\n",
 				s.Filename, s.Name, s.Description, s.Reason))
@@ -154,7 +205,7 @@ Some prose with "quotes" and \backslashes\ that need no escaping.
 	}
 
 	if len(rules) > 0 {
-		sb.WriteString("### Selected project-specific rules — include in 05-project-specific.md\n")
+		sb.WriteString("### Selected project-specific guidance — include in 05-project-specific.md\n")
 		for _, r := range rules {
 			sb.WriteString(fmt.Sprintf("- %s (reason: %s)\n", r.Rule, r.Reason))
 		}
@@ -162,6 +213,19 @@ Some prose with "quotes" and \backslashes\ that need no escaping.
 	}
 
 	return sb.String()
+}
+
+// projectSizeHint nudges the LLM to scale the output to project size so small
+// repos don't get 10-rule manifestos.
+func projectSizeHint(fp *analyzer.ProjectFingerprint) string {
+	switch {
+	case fp.LOC < 3_000:
+		return "This is a small codebase. Keep CLAUDE.md under ~80 lines, each rule file under ~25 lines, and do not pad with generic content."
+	case fp.LOC < 20_000:
+		return "This is a mid-sized codebase. CLAUDE.md around 100-140 lines is appropriate; rule files 25-40 lines each."
+	default:
+		return "This is a large codebase. You can afford more detail in CLAUDE.md and docs/architecture.md, but still avoid generic fluff — ground every claim in real files."
+	}
 }
 
 // parseGeneration scans the LLM output for `=== FILE: path ===` / `=== END FILE ===`

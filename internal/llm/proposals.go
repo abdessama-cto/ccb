@@ -64,15 +64,30 @@ func buildProposalsPrompt(u *ProjectUnderstanding, fp *analyzer.ProjectFingerpri
 	var sb strings.Builder
 	sb.WriteString(`You are configuring Claude Code for a specific project.
 Propose the agents, rules, and skills that would genuinely help an engineer
-working on THIS codebase. Quality > quantity.
+working on THIS codebase.
 
-RULES:
-- Every proposal MUST be justified by something observed in the project (a file, a pattern, a domain, a wizard answer).
-- DO NOT propose generic agents that would apply to any project unless clearly justified.
+PHILOSOPHY:
+- Quality over quantity. One sharp, obviously-useful proposal beats three vague ones.
+- Ground every proposal in a real signal from the project — a file, a pattern,
+  a domain detail, a wizard answer. If you can't justify it concretely, don't
+  propose it.
+- Avoid defensive filler agents like "code-reviewer", "debugger", "security-reviewer"
+  unless the project has a specific domain (payments, auth, multi-tenant, etc.)
+  that makes one genuinely useful.
+- Rules are GUIDANCE, not commandments. Phrase them as "When X, here's how this
+  project does Y" — avoid "NEVER", "ALWAYS", "MUST".
+
+SIZING — scale proposals to project size:
+`)
+	sb.WriteString(proposalSizingHint(fp))
+	sb.WriteString(`
+
+FORMAT:
 - Filenames: lowercase kebab-case, .md extension (e.g. "payment-webhook-guard.md").
-- "selected" = true means the item should be enabled by default. Set false for items
-  that are useful but optional.
-- Limits: up to 8 agents, up to 12 rules, up to 10 skills.
+- "selected" = true means the item is enabled by default.
+- Every "reason" should cite the concrete signal you used (file path, pattern, domain).
+
+Hard limits (cap, NOT a target): up to 6 agents, up to 8 rules, up to 8 skills.
 
 Return ONLY this JSON (no markdown fences, no preamble):
 {
@@ -162,6 +177,30 @@ func parseProposals(raw string) (*Proposals, error) {
 	}
 
 	return &p, nil
+}
+
+// proposalSizingHint returns a size-adaptive recommendation for how many
+// agents/rules/skills to propose. The LLM treats "up to N" as a target unless
+// we explicitly tell it otherwise — so we give concrete numbers per size tier.
+func proposalSizingHint(fp *analyzer.ProjectFingerprint) string {
+	switch {
+	case fp.LOC < 3_000:
+		return "- Project size: small (~" + locLabel(fp.LOC) + ").\n" +
+			"  Aim for 1-3 agents, 2-4 rules, 2-4 skills. Fewer is fine if you can't justify more."
+	case fp.LOC < 20_000:
+		return "- Project size: mid (~" + locLabel(fp.LOC) + ").\n" +
+			"  Aim for 2-4 agents, 3-6 rules, 3-6 skills."
+	default:
+		return "- Project size: large (~" + locLabel(fp.LOC) + ").\n" +
+			"  Aim for 3-5 agents, 4-7 rules, 4-7 skills. Still prioritize signal over volume."
+	}
+}
+
+func locLabel(loc int) string {
+	if loc >= 1000 {
+		return fmt.Sprintf("%dk LOC", loc/1000)
+	}
+	return fmt.Sprintf("%d LOC", loc)
 }
 
 func ensureMD(filename, fallback string) string {
