@@ -1,0 +1,77 @@
+name: 🐛 Bug report
+description: Something ccb did wrong on your project
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. A clean reproducer saves hours.
+
+  - type: input
+    id: version
+    attributes:
+      label: ccb version
+      description: Output of `ccb version`
+      placeholder: "ccb 0.9.7 · darwin/arm64"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: LLM provider you used
+      options:
+        - OpenAI
+        - Gemini
+        - Ollama
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: "gemini-2.5-flash, gpt-5.4-mini, qwen2.5-coder, ..."
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you run and what went wrong?
+      placeholder: |
+        I ran `ccb start` in my Nuxt.js project and got "invalid character 'W' after object key:value pair".
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: false
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Full terminal output
+      description: Paste the full output (redact API keys). For LLM parse failures, include the raw LLM response if you can capture it.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: project
+    attributes:
+      label: Project context
+      description: Stack, rough size (LOC / files), anything unusual about the repo
+      placeholder: "Nuxt 3 + Pinia, ~25k LOC, monorepo with packages/"
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Quick checks
+      options:
+        - label: I ran `ccb doctor` and it didn't flag anything
+        - label: I made sure I'm on the latest release (`ccb update`)

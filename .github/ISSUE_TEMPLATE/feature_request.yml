@@ -1,0 +1,34 @@
+name: 💡 Feature request
+description: Suggest a new command, flag, prompt tweak, or anything else
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that ccb doesn't help with today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How would you like ccb to behave? A rough sketch is fine — we'll iterate.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Other tools, scripts, or workarounds you tried first.
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Project / stack context (optional)
+      placeholder: "Laravel 11 + Livewire 3, ~40k LOC, 5 devs, uses conventional commits"

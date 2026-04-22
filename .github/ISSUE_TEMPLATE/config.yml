@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 💬 Share what ccb produced
+    url: https://github.com/abdessama-cto/ccb/issues/new?labels=output-sample
+    about: Drop a snippet of the CLAUDE.md / agents / rules ccb generated for your project — good, bad, or weird. This is how we tune the prompts.

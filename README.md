@@ -11,7 +11,7 @@
 One line, no Go toolchain required:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/abdessama-cto/ccb/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/abdessama-cto/ccb/main/install.sh | bash
 ```
 
 The installer drops a native Apple Silicon binary into `~/.local/bin/ccb` and makes sure it's on your `PATH`. If you've already got `gh`, `jq`, and an AI provider API key handy you're ready to go.

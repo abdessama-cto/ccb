@@ -3,7 +3,7 @@
 # ccbootstrap — installer for macOS Apple Silicon
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/abdessama-cto/ccb/master/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/abdessama-cto/ccb/main/install.sh | bash
 #
 # Environment variables:
 #   CCBOOTSTRAP_VERSION   Target version (default: latest)
